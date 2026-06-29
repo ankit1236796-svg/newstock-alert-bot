@@ -1,4 +1,5 @@
 from app.integrations.marketplaces.base import (
+    BaseMarketplace,
     MarketplaceAdapter,
     MarketplaceCheckRequest,
     MarketplaceCheckResult,
@@ -6,6 +7,7 @@ from app.integrations.marketplaces.base import (
 )
 
 __all__ = [
+    "BaseMarketplace",
     "MarketplaceAdapter",
     "MarketplaceCheckRequest",
     "MarketplaceCheckResult",
