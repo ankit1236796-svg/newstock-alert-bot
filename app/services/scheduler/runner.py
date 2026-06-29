@@ -57,14 +57,19 @@ class SqlAlchemyStockCheckUnitOfWork:
 def create_stock_checker(settings: Settings, bot: Bot | None = None) -> BackgroundStockChecker:
     browser_pool = PlaywrightBrowserPool(
         headless=settings.browser_headless,
-        max_browsers=settings.stock_check_worker_limit,
+        max_browsers=settings.browser_pool_size,
         launch_timeout_ms=settings.browser_timeout_seconds * 1000,
+        user_agent=settings.browser_user_agent,
     )
     amazon_adapter = AmazonMarketplaceAdapter(
         browser_pool=browser_pool,
         headless=settings.browser_headless,
         timeout_ms=settings.browser_timeout_seconds * 1000,
         retries=settings.stock_check_retry_attempts,
+        retry_backoff_seconds=settings.amazon_retry_backoff_seconds,
+        min_delay_ms=settings.amazon_min_delay_ms,
+        max_delay_ms=settings.amazon_max_delay_ms,
+        user_agent=settings.browser_user_agent,
     )
     return BackgroundStockChecker(
         uow_factory=lambda: SqlAlchemyStockCheckUnitOfWork(),

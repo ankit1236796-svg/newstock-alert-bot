@@ -156,3 +156,48 @@ async def _run_background_checker_skips_unsupported_marketplaces() -> None:
 
     assert adapter.calls == []
     assert products.updated == []
+
+
+class SometimesFailingAmazonAdapter(FakeAmazonAdapter):
+    async def check_product(self, product_url: str, pincodes: list[str]) -> AmazonProductSnapshot:
+        if "fail" in product_url:
+            raise RuntimeError("temporary Amazon failure")
+        return await super().check_product(product_url, pincodes)
+
+
+def test_background_checker_continues_after_product_failure() -> None:
+    asyncio.run(_run_background_checker_continues_after_product_failure())
+
+
+async def _run_background_checker_continues_after_product_failure() -> None:
+    failing = Product(
+        1,
+        "FAILSKU",
+        Marketplace.AMAZON,
+        "https://amazon.in/dp/fail",
+        "Failing",
+        StockStatus.UNKNOWN,
+    )
+    healthy = Product(
+        2,
+        "B012345678",
+        Marketplace.AMAZON,
+        "https://amazon.in/dp/B012345678",
+        "Healthy",
+        StockStatus.UNKNOWN,
+    )
+    products = InMemoryProducts([failing, healthy])
+    pincodes = InMemoryPincodes({1: ["110001"], 2: ["560001"]})
+    history = InMemoryStockHistory()
+    adapter = SometimesFailingAmazonAdapter()
+    checker = BackgroundStockChecker(
+        uow_factory=lambda: InMemoryUnitOfWork(products, pincodes, history),
+        amazon_adapter=adapter,
+        worker_limit=2,
+    )
+
+    await checker.check_all_active_products()
+
+    assert adapter.calls == [(healthy.product_url, ["560001"])]
+    assert [product.id for product in products.updated] == [healthy.id]
+    assert [record.product_id for record in history.records] == [healthy.id]
