@@ -1,13 +1,15 @@
 from app.domain.repositories.protocols import (
     ProductPincodeRepository,
     ProductRepository,
-    StockCheckRepository,
+    StockHistoryRepository,
+    UserProductTrackingRepository,
     UserRepository,
 )
 
 __all__ = [
     "ProductPincodeRepository",
     "ProductRepository",
-    "StockCheckRepository",
+    "StockHistoryRepository",
+    "UserProductTrackingRepository",
     "UserRepository",
 ]

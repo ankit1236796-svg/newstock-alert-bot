@@ -1,185 +1,291 @@
-from datetime import datetime
-from typing import Any, cast
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import aiosqlite
+from app.database.models import (
+    ProductModel,
+    ProductPincodeModel,
+    StockHistoryModel,
+    UserModel,
+    UserProductTrackingModel,
+)
+from app.domain.entities import (
+    Marketplace,
+    Product,
+    ProductPincode,
+    StockHistory,
+    StockStatus,
+    User,
+    UserProductTracking,
+)
 
-from app.domain.entities import Marketplace, Product, ProductPincode, StockCheck, StockStatus, User
+
+def _status(value: str | StockStatus | None) -> StockStatus | None:
+    return StockStatus(value) if value is not None else None
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
+def _marketplace(value: str | Marketplace) -> Marketplace:
+    return Marketplace(value)
 
 
-class SqliteUserRepository:
-    def __init__(self, connection: aiosqlite.Connection) -> None:
-        self._connection = connection
+class SqlAlchemyUserRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, user: User) -> User:
+        model = UserModel(
+            telegram_user_id=user.telegram_user_id,
+            username=user.username,
+            first_name=user.first_name,
+        )
+        self._session.add(model)
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
 
     async def upsert(self, user: User) -> User:
-        cursor = await self._connection.execute(
-            """
-            INSERT INTO users (telegram_user_id, username, first_name, last_name, is_active)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(telegram_user_id) DO UPDATE SET
-                username = excluded.username,
-                first_name = excluded.first_name,
-                last_name = excluded.last_name,
-                is_active = excluded.is_active,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING *
-            """,
-            (
-                user.telegram_user_id,
-                user.username,
-                user.first_name,
-                user.last_name,
-                int(user.is_active),
-            ),
-        )
-        row = await cursor.fetchone()
-        await self._connection.commit()
-        return self._user_from_row(cast(aiosqlite.Row, row))
+        existing = await self.get_by_telegram_id(user.telegram_user_id)
+        if existing is None:
+            return await self.create(user)
+        model = await self._session.get(UserModel, existing.id)
+        if model is None:
+            raise RuntimeError("User disappeared during upsert")
+        model.username = user.username
+        model.first_name = user.first_name
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
+
+    async def get(self, user_id: int) -> User | None:
+        model = await self._session.get(UserModel, user_id)
+        return self._to_entity(model) if model else None
 
     async def get_by_telegram_id(self, telegram_user_id: int) -> User | None:
-        cursor = await self._connection.execute(
-            "SELECT * FROM users WHERE telegram_user_id = ?", (telegram_user_id,)
+        result = await self._session.execute(
+            select(UserModel).where(UserModel.telegram_user_id == telegram_user_id)
         )
-        row = await cursor.fetchone()
-        return self._user_from_row(row) if row else None
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
 
     @staticmethod
-    def _user_from_row(row: aiosqlite.Row) -> User:
-        data = dict(row)
+    def _to_entity(model: UserModel) -> User:
         return User(
-            id=cast(int, data["id"]),
-            telegram_user_id=cast(int, data["telegram_user_id"]),
-            username=cast(str | None, data["username"]),
-            first_name=cast(str | None, data["first_name"]),
-            last_name=cast(str | None, data["last_name"]),
-            is_active=bool(data["is_active"]),
-            created_at=_parse_datetime(cast(str | None, data["created_at"])),
-            updated_at=_parse_datetime(cast(str | None, data["updated_at"])),
+            model.id, model.telegram_user_id, model.username, model.first_name, model.created_at
         )
 
 
-class SqliteProductRepository:
-    def __init__(self, connection: aiosqlite.Connection) -> None:
-        self._connection = connection
+class SqlAlchemyProductRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def create(self, product: Product) -> Product:
-        cursor = await self._connection.execute(
-            """
-            INSERT INTO products (
-                user_id, marketplace, product_url, display_name, target_price_paise, is_active
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            RETURNING *
-            """,
-            (
-                product.user_id,
-                product.marketplace.value,
-                product.product_url,
-                product.display_name,
-                product.target_price_paise,
-                int(product.is_active),
-            ),
+        model = ProductModel(
+            product_id=product.product_id,
+            marketplace=product.marketplace.value,
+            product_url=product.product_url,
+            product_name=product.product_name,
+            current_status=product.current_status.value,
+            last_checked=product.last_checked,
         )
-        row = await cursor.fetchone()
-        await self._connection.commit()
-        return self._product_from_row(cast(aiosqlite.Row, row))
+        self._session.add(model)
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
 
-    async def list_active_by_user(self, user_id: int) -> list[Product]:
-        cursor = await self._connection.execute(
-            "SELECT * FROM products WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC",
-            (user_id,),
+    async def get(self, product_id: int) -> Product | None:
+        model = await self._session.get(ProductModel, product_id)
+        return self._to_entity(model) if model else None
+
+    async def get_by_marketplace_product_id(
+        self, marketplace: str, product_id: str
+    ) -> Product | None:
+        result = await self._session.execute(
+            select(ProductModel).where(
+                ProductModel.marketplace == marketplace, ProductModel.product_id == product_id
+            )
         )
-        rows = await cursor.fetchall()
-        return [self._product_from_row(row) for row in rows]
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def update(self, product: Product) -> Product:
+        if product.id is None:
+            raise ValueError("Product id is required for update")
+        model = await self._session.get(ProductModel, product.id)
+        if model is None:
+            raise ValueError(f"Product {product.id} does not exist")
+        model.product_id = product.product_id
+        model.marketplace = product.marketplace.value
+        model.product_url = product.product_url
+        model.product_name = product.product_name
+        model.current_status = product.current_status.value
+        model.last_checked = product.last_checked
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
 
     @staticmethod
-    def _product_from_row(row: aiosqlite.Row) -> Product:
-        data: dict[str, Any] = dict(row)
+    def _to_entity(model: ProductModel) -> Product:
         return Product(
-            id=cast(int, data["id"]),
-            user_id=cast(int, data["user_id"]),
-            marketplace=Marketplace(cast(str, data["marketplace"])),
-            product_url=cast(str, data["product_url"]),
-            display_name=cast(str, data["display_name"]),
-            target_price_paise=cast(int | None, data["target_price_paise"]),
-            is_active=bool(data["is_active"]),
-            created_at=_parse_datetime(cast(str | None, data["created_at"])),
-            updated_at=_parse_datetime(cast(str | None, data["updated_at"])),
+            model.id,
+            model.product_id,
+            _marketplace(model.marketplace),
+            model.product_url,
+            model.product_name,
+            StockStatus(model.current_status),
+            model.last_checked,
+            model.created_at,
         )
 
 
-class SqliteProductPincodeRepository:
-    def __init__(self, connection: aiosqlite.Connection) -> None:
-        self._connection = connection
+class SqlAlchemyProductPincodeRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
     async def add(self, pincode: ProductPincode) -> ProductPincode:
-        cursor = await self._connection.execute(
-            """
-            INSERT INTO product_pincodes (product_id, pincode, is_active)
-            VALUES (?, ?, ?)
-            ON CONFLICT(product_id, pincode) DO UPDATE SET is_active = excluded.is_active
-            RETURNING *
-            """,
-            (pincode.product_id, pincode.pincode, int(pincode.is_active)),
+        existing = await self._session.execute(
+            select(ProductPincodeModel).where(
+                ProductPincodeModel.product_id == pincode.product_id,
+                ProductPincodeModel.pincode == pincode.pincode,
+            )
         )
-        row = await cursor.fetchone()
-        await self._connection.commit()
-        return self._pincode_from_row(cast(aiosqlite.Row, row))
+        model = existing.scalar_one_or_none()
+        if model is None:
+            model = ProductPincodeModel(product_id=pincode.product_id, pincode=pincode.pincode)
+            self._session.add(model)
+            await self._session.commit()
+            await self._session.refresh(model)
+        return self._to_entity(model)
 
-    async def list_active_for_product(self, product_id: int) -> list[ProductPincode]:
-        cursor = await self._connection.execute(
-            (
-                "SELECT * FROM product_pincodes "
-                "WHERE product_id = ? AND is_active = 1 ORDER BY pincode"
-            ),
-            (product_id,),
+    async def list_for_product(self, product_id: int) -> list[ProductPincode]:
+        result = await self._session.execute(
+            select(ProductPincodeModel)
+            .where(ProductPincodeModel.product_id == product_id)
+            .order_by(ProductPincodeModel.pincode)
         )
-        rows = await cursor.fetchall()
-        return [self._pincode_from_row(row) for row in rows]
+        return [self._to_entity(model) for model in result.scalars()]
+
+    async def remove(self, product_id: int, pincode: str) -> None:
+        await self._session.execute(
+            delete(ProductPincodeModel).where(
+                ProductPincodeModel.product_id == product_id, ProductPincodeModel.pincode == pincode
+            )
+        )
+        await self._session.commit()
 
     @staticmethod
-    def _pincode_from_row(row: aiosqlite.Row) -> ProductPincode:
-        data = dict(row)
-        return ProductPincode(
-            id=cast(int, data["id"]),
-            product_id=cast(int, data["product_id"]),
-            pincode=cast(str, data["pincode"]),
-            is_active=bool(data["is_active"]),
-            created_at=_parse_datetime(cast(str | None, data["created_at"])),
-        )
+    def _to_entity(model: ProductPincodeModel) -> ProductPincode:
+        return ProductPincode(model.id, model.product_id, model.pincode, model.created_at)
 
 
-class SqliteStockCheckRepository:
-    def __init__(self, connection: aiosqlite.Connection) -> None:
-        self._connection = connection
+class SqlAlchemyUserProductTrackingRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
 
-    async def record(self, stock_check: StockCheck) -> StockCheck:
-        cursor = await self._connection.execute(
-            """
-            INSERT INTO stock_checks (product_id, pincode, status, price_paise, raw_summary)
-            VALUES (?, ?, ?, ?, ?)
-            RETURNING *
-            """,
-            (
-                stock_check.product_id,
-                stock_check.pincode,
-                stock_check.status.value,
-                stock_check.price_paise,
-                stock_check.raw_summary,
+    async def create(self, tracking: UserProductTracking) -> UserProductTracking:
+        model = UserProductTrackingModel(
+            user_id=tracking.user_id,
+            product_id=tracking.product_id,
+            notifications_enabled=tracking.notifications_enabled,
+            last_notified_status=(
+                tracking.last_notified_status.value if tracking.last_notified_status else None
             ),
+            last_notified_at=tracking.last_notified_at,
         )
-        row = await cursor.fetchone()
-        await self._connection.commit()
-        data = dict(cast(aiosqlite.Row, row))
-        return StockCheck(
-            id=cast(int, data["id"]),
-            product_id=cast(int, data["product_id"]),
-            pincode=cast(str, data["pincode"]),
-            status=StockStatus(cast(str, data["status"])),
-            price_paise=cast(int | None, data["price_paise"]),
-            raw_summary=cast(str | None, data["raw_summary"]),
-            checked_at=_parse_datetime(cast(str | None, data["checked_at"])),
+        self._session.add(model)
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
+
+    async def get(self, user_id: int, product_id: int) -> UserProductTracking | None:
+        result = await self._session.execute(
+            select(UserProductTrackingModel).where(
+                UserProductTrackingModel.user_id == user_id,
+                UserProductTrackingModel.product_id == product_id,
+            )
         )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def list_for_user(self, user_id: int) -> list[UserProductTracking]:
+        result = await self._session.execute(
+            select(UserProductTrackingModel).where(UserProductTrackingModel.user_id == user_id)
+        )
+        return [self._to_entity(model) for model in result.scalars()]
+
+    async def list_for_product(self, product_id: int) -> list[UserProductTracking]:
+        result = await self._session.execute(
+            select(UserProductTrackingModel).where(
+                UserProductTrackingModel.product_id == product_id
+            )
+        )
+        return [self._to_entity(model) for model in result.scalars()]
+
+    async def update_notification_state(self, tracking: UserProductTracking) -> UserProductTracking:
+        if tracking.id is None:
+            raise ValueError("Tracking id is required for update")
+        model = await self._session.get(UserProductTrackingModel, tracking.id)
+        if model is None:
+            raise ValueError(f"Tracking {tracking.id} does not exist")
+        model.notifications_enabled = tracking.notifications_enabled
+        model.last_notified_status = (
+            tracking.last_notified_status.value if tracking.last_notified_status else None
+        )
+        model.last_notified_at = tracking.last_notified_at
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
+
+    async def delete(self, user_id: int, product_id: int) -> None:
+        await self._session.execute(
+            delete(UserProductTrackingModel).where(
+                UserProductTrackingModel.user_id == user_id,
+                UserProductTrackingModel.product_id == product_id,
+            )
+        )
+        await self._session.commit()
+
+    @staticmethod
+    def _to_entity(model: UserProductTrackingModel) -> UserProductTracking:
+        return UserProductTracking(
+            model.id,
+            model.user_id,
+            model.product_id,
+            model.notifications_enabled,
+            _status(model.last_notified_status),
+            model.last_notified_at,
+            model.created_at,
+        )
+
+
+class SqlAlchemyStockHistoryRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def record(self, stock_history: StockHistory) -> StockHistory:
+        model = StockHistoryModel(
+            product_id=stock_history.product_id,
+            status=stock_history.status.value,
+            changed_at=stock_history.changed_at,
+        )
+        self._session.add(model)
+        await self._session.commit()
+        await self._session.refresh(model)
+        return self._to_entity(model)
+
+    async def list_for_product(self, product_id: int) -> list[StockHistory]:
+        result = await self._session.execute(
+            select(StockHistoryModel)
+            .where(StockHistoryModel.product_id == product_id)
+            .order_by(StockHistoryModel.changed_at)
+        )
+        return [self._to_entity(model) for model in result.scalars()]
+
+    @staticmethod
+    def _to_entity(model: StockHistoryModel) -> StockHistory:
+        return StockHistory(model.id, model.product_id, StockStatus(model.status), model.changed_at)
+
+
+# Backwards-compatible aliases for the old SQLite repository names.
+SqliteUserRepository = SqlAlchemyUserRepository
+SqliteProductRepository = SqlAlchemyProductRepository
+SqliteProductPincodeRepository = SqlAlchemyProductPincodeRepository
+SqliteStockHistoryRepository = SqlAlchemyStockHistoryRepository

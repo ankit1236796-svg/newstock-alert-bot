@@ -2,91 +2,62 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-_connection: aiosqlite.Connection | None = None
+from app.database.models import Base
+
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
-def _sqlite_path(database_url: str) -> Path:
+def _ensure_sqlite_parent(database_url: str) -> None:
     prefix = "sqlite+aiosqlite:///"
     if not database_url.startswith(prefix):
-        raise ValueError("Only sqlite+aiosqlite URLs are supported by this starter architecture")
-    return Path(database_url.removeprefix(prefix))
+        raise ValueError("Only sqlite+aiosqlite URLs are supported")
+    db_path = database_url.removeprefix(prefix)
+    if db_path not in ("", ":memory:"):
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 
-async def init_database(database_url: str) -> None:
-    global _connection
-    db_path = _sqlite_path(database_url)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    _connection = await aiosqlite.connect(db_path)
-    _connection.row_factory = aiosqlite.Row
-    await _connection.execute("PRAGMA foreign_keys = ON")
-    await _connection.executescript(SCHEMA_SQL)
-    await _connection.commit()
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection: object, _connection_record: object) -> None:
+    cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+def create_engine(database_url: str) -> AsyncEngine:
+    _ensure_sqlite_parent(database_url)
+    return create_async_engine(database_url, future=True)
+
+
+async def init_database(database_url: str, *, run_migrations: bool = False) -> None:
+    global _engine, _session_factory
+    _engine = create_engine(database_url)
+    _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
+    if not run_migrations:
+        async with _engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
 
 
 async def close_database() -> None:
-    global _connection
-    if _connection is not None:
-        await _connection.close()
-        _connection = None
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None
 
 
 @asynccontextmanager
-async def get_connection() -> AsyncIterator[aiosqlite.Connection]:
-    if _connection is None:
+async def get_session() -> AsyncIterator[AsyncSession]:
+    if _session_factory is None:
         raise RuntimeError("Database has not been initialized")
-    yield _connection
-
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_user_id INTEGER NOT NULL UNIQUE,
-    username TEXT,
-    first_name TEXT,
-    last_name TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    marketplace TEXT NOT NULL,
-    product_url TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    target_price_paise INTEGER,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS product_pincodes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id INTEGER NOT NULL,
-    pincode TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(product_id, pincode),
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS stock_checks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    product_id INTEGER NOT NULL,
-    pincode TEXT NOT NULL,
-    status TEXT NOT NULL,
-    price_paise INTEGER,
-    raw_summary TEXT,
-    checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_products_user_id ON products(user_id);
-CREATE INDEX IF NOT EXISTS idx_product_pincodes_product_id ON product_pincodes(product_id);
-CREATE INDEX IF NOT EXISTS idx_stock_checks_product_id_checked_at
-    ON stock_checks(product_id, checked_at);
-"""
+    async with _session_factory() as session:
+        yield session
