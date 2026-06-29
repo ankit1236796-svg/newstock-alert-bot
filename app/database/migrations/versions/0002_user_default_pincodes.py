@@ -30,4 +30,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("idx_user_default_pincodes_user_id", table_name="user_default_pincodes")
     op.drop_table("user_default_pincodes")
