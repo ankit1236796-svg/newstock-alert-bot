@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 data/
 .env
+.env.*
+!.env.example
+backups/
+*.sqlite3
+*.db

@@ -5,6 +5,12 @@ from aiogram.types import BotCommand
 
 from app.core.config import Settings
 from app.database.connection import close_database, init_database
+from app.production_checks import (
+    verify_browser_pool,
+    verify_database,
+    verify_scheduler,
+    verify_telegram_bot,
+)
 from app.services.scheduler.runner import create_scheduler, start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
@@ -14,10 +20,14 @@ _stock_scheduler: object | None = None
 async def on_startup(bot: Bot, settings: Settings) -> None:
     logger.info("telegram_bot_startup", extra={"environment": settings.app_env})
     await init_database(settings.database_url)
+    await verify_database()
+    verify_browser_pool(settings)
     global _stock_scheduler
     scheduler = create_scheduler(settings, bot)
     _stock_scheduler = scheduler
     await start_scheduler(scheduler)
+    verify_scheduler(scheduler)
+    await verify_telegram_bot(bot)
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Register and start the bot"),

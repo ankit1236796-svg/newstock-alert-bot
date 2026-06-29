@@ -13,17 +13,34 @@ services:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/newstock_alert_bot.sqlite3}
       STOCK_CHECK_INTERVAL_SECONDS: ${STOCK_CHECK_INTERVAL_SECONDS:-300}
+      STOCK_CHECK_WORKER_LIMIT: ${STOCK_CHECK_WORKER_LIMIT:-2}
+      STOCK_CHECK_RETRY_ATTEMPTS: ${STOCK_CHECK_RETRY_ATTEMPTS:-2}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-Asia/Kolkata}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      BROWSER_TIMEOUT_SECONDS: ${BROWSER_TIMEOUT_SECONDS:-30}
       PLAYWRIGHT_TIMEOUT: ${PLAYWRIGHT_TIMEOUT:-30}
+      BROWSER_POOL_SIZE: ${BROWSER_POOL_SIZE:-2}
+      BROWSER_USER_AGENT: ${BROWSER_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}
       MAX_CONCURRENT_CHECKS: ${MAX_CONCURRENT_CHECKS:-2}
+      AMAZON_MIN_DELAY_MS: ${AMAZON_MIN_DELAY_MS:-250}
+      AMAZON_MAX_DELAY_MS: ${AMAZON_MAX_DELAY_MS:-1500}
+      AMAZON_RETRY_BACKOFF_SECONDS: ${AMAZON_RETRY_BACKOFF_SECONDS:-0.75}
     volumes:
       - bot-data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
       test: ["CMD", "python", "-m", "app.healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     logging:
       driver: json-file
       options:
