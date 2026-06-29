@@ -4,7 +4,12 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
 from app.database.connection import get_session
-from app.database.repositories import SqlAlchemyUserRepository
+from app.database.repositories import (
+    SqlAlchemyProductPincodeRepository,
+    SqlAlchemyProductRepository,
+    SqlAlchemyUserProductTrackingRepository,
+    SqlAlchemyUserRepository,
+)
 
 
 class DatabaseSessionMiddleware(BaseMiddleware):
@@ -19,4 +24,7 @@ class DatabaseSessionMiddleware(BaseMiddleware):
         async with get_session() as session:
             data["session"] = session
             data["user_repository"] = SqlAlchemyUserRepository(session)
+            data["product_repository"] = SqlAlchemyProductRepository(session)
+            data["pincode_repository"] = SqlAlchemyProductPincodeRepository(session)
+            data["tracking_repository"] = SqlAlchemyUserProductTrackingRepository(session)
             return await handler(event, data)
