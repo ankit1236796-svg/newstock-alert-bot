@@ -156,6 +156,15 @@ class SqlAlchemyProductRepository:
         await self._session.execute(delete(ProductModel).where(ProductModel.id == product_id))
         await self._session.commit()
 
+    async def list_active_tracked(self) -> list[Product]:
+        result = await self._session.execute(
+            select(ProductModel)
+            .join(UserProductTrackingModel)
+            .distinct()
+            .order_by(ProductModel.id)
+        )
+        return [self._to_entity(model) for model in result.scalars()]
+
     @staticmethod
     def _to_entity(model: ProductModel) -> Product:
         return Product(
