@@ -37,6 +37,8 @@ async def help_command(message: Message) -> None:
         "Available commands:\n"
         "/start - Register and initialize your bot profile\n"
         "/help - Show this help message\n"
+        "/add - Add a product to track\n"
+        "/list - Show your tracked products\n"
         "/ping - Check whether the bot is responsive"
     )
 
