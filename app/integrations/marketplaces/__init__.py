@@ -1,3 +1,4 @@
+from app.integrations.marketplaces.amazon import AmazonMarketplaceAdapter
 from app.integrations.marketplaces.base import (
     BaseMarketplace,
     MarketplaceAdapter,
@@ -7,6 +8,7 @@ from app.integrations.marketplaces.base import (
 )
 
 __all__ = [
+    "AmazonMarketplaceAdapter",
     "BaseMarketplace",
     "MarketplaceAdapter",
     "MarketplaceCheckRequest",
