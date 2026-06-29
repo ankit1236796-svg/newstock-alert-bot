@@ -15,7 +15,7 @@ async def on_startup(bot: Bot, settings: Settings) -> None:
     logger.info("telegram_bot_startup", extra={"environment": settings.app_env})
     await init_database(settings.database_url)
     global _stock_scheduler
-    scheduler = create_scheduler(settings)
+    scheduler = create_scheduler(settings, bot)
     _stock_scheduler = scheduler
     await start_scheduler(scheduler)
     await bot.set_my_commands(

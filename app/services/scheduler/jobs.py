@@ -4,15 +4,19 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.domain.entities import Marketplace, Product, StockHistory
 from app.domain.repositories import (
     ProductPincodeRepository,
     ProductRepository,
     StockHistoryRepository,
+    UserProductTrackingRepository,
+    UserRepository,
 )
 from app.integrations.marketplaces.amazon.adapter import AmazonProductSnapshot
+from app.services.notifications.alerts import TelegramAlertService
+from app.services.notifications.notifier import Notifier
 
 logger = logging.getLogger(__name__)
 
@@ -27,22 +31,28 @@ class StockCheckUnitOfWork(Protocol):
     products: ProductRepository
     pincodes: ProductPincodeRepository
     stock_history: StockHistoryRepository
+    users: UserRepository
+    trackings: UserProductTrackingRepository
 
     async def __aenter__(self) -> "StockCheckUnitOfWork": ...
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: object
+    ) -> None: ...
 
 
 class BackgroundStockChecker:
     def __init__(
         self,
         *,
-        uow_factory: Callable[[], StockCheckUnitOfWork],
+        uow_factory: Callable[[], Any],
         amazon_adapter: AmazonProductChecker,
         worker_limit: int,
+        notifier: Notifier | None = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._amazon_adapter = amazon_adapter
         self._worker_limit = worker_limit
+        self._notifier = notifier
 
     async def check_all_active_products(self) -> None:
         started = perf_counter()
@@ -92,8 +102,22 @@ class BackgroundStockChecker:
                 product_name=snapshot.product_name or product.product_name,
                 current_status=snapshot.current_stock_status,
                 last_checked=snapshot.last_checked,
+                current_price_paise=snapshot.current_price_paise,
+                delivery_availability_by_pincode={
+                    delivery.pincode: delivery.is_available
+                    for delivery in snapshot.delivery_availability
+                },
             )
             async with self._uow_factory() as uow:
+                if self._notifier is not None:
+                    alert_service = TelegramAlertService(
+                        notifier=self._notifier,
+                        user_repository=uow.users,
+                        tracking_repository=uow.trackings,
+                    )
+                    await alert_service.notify_product_changes(
+                        previous=product, current=checked_product, snapshot=snapshot
+                    )
                 await uow.products.update(checked_product)
                 await uow.stock_history.record(
                     StockHistory(None, product.id, snapshot.current_stock_status, datetime.now(UTC))

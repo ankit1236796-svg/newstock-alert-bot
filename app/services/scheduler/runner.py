@@ -1,6 +1,7 @@
 import logging
 from types import TracebackType
 
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,11 +12,14 @@ from app.database.repositories import (
     SqlAlchemyProductPincodeRepository,
     SqlAlchemyProductRepository,
     SqlAlchemyStockHistoryRepository,
+    SqlAlchemyUserProductTrackingRepository,
+    SqlAlchemyUserRepository,
 )
 from app.integrations.marketplaces.amazon.adapter import (
     AmazonMarketplaceAdapter,
     PlaywrightBrowserPool,
 )
+from app.services.notifications.telegram import TelegramNotifier
 from app.services.scheduler.jobs import BackgroundStockChecker
 
 logger = logging.getLogger(__name__)
@@ -27,6 +31,8 @@ class SqlAlchemyStockCheckUnitOfWork:
         self.products: SqlAlchemyProductRepository
         self.pincodes: SqlAlchemyProductPincodeRepository
         self.stock_history: SqlAlchemyStockHistoryRepository
+        self.users: SqlAlchemyUserRepository
+        self.trackings: SqlAlchemyUserProductTrackingRepository
         self._session_context = get_session()
         self._session: AsyncSession | None = None
 
@@ -35,6 +41,8 @@ class SqlAlchemyStockCheckUnitOfWork:
         self.products = SqlAlchemyProductRepository(self._session)
         self.pincodes = SqlAlchemyProductPincodeRepository(self._session)
         self.stock_history = SqlAlchemyStockHistoryRepository(self._session)
+        self.users = SqlAlchemyUserRepository(self._session)
+        self.trackings = SqlAlchemyUserProductTrackingRepository(self._session)
         return self
 
     async def __aexit__(
@@ -46,7 +54,7 @@ class SqlAlchemyStockCheckUnitOfWork:
         await self._session_context.__aexit__(exc_type, exc, tb)
 
 
-def create_stock_checker(settings: Settings) -> BackgroundStockChecker:
+def create_stock_checker(settings: Settings, bot: Bot | None = None) -> BackgroundStockChecker:
     browser_pool = PlaywrightBrowserPool(
         headless=settings.browser_headless,
         max_browsers=settings.stock_check_worker_limit,
@@ -62,11 +70,12 @@ def create_stock_checker(settings: Settings) -> BackgroundStockChecker:
         uow_factory=lambda: SqlAlchemyStockCheckUnitOfWork(),
         amazon_adapter=amazon_adapter,
         worker_limit=settings.stock_check_worker_limit,
+        notifier=TelegramNotifier(bot) if bot is not None else None,
     )
 
 
-def create_scheduler(settings: Settings) -> AsyncIOScheduler:
-    checker = create_stock_checker(settings)
+def create_scheduler(settings: Settings, bot: Bot | None = None) -> AsyncIOScheduler:
+    checker = create_stock_checker(settings, bot)
     scheduler = AsyncIOScheduler(timezone=settings.scheduler_timezone)
     scheduler.add_job(
         checker.check_all_active_products,

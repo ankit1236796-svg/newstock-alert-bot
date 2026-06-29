@@ -42,6 +42,8 @@ class Product:
     current_status: StockStatus
     last_checked: datetime | None = None
     created_at: datetime | None = None
+    current_price_paise: int | None = None
+    delivery_availability_by_pincode: dict[str, bool] | None = None
 
 
 @dataclass(frozen=True, slots=True)
