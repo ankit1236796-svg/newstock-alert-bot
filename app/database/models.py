@@ -26,6 +26,24 @@ class UserModel(Base):
     trackings: Mapped[list["UserProductTrackingModel"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    default_pincodes: Mapped[list["UserDefaultPincodeModel"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class UserDefaultPincodeModel(Base):
+    __tablename__ = "user_default_pincodes"
+    __table_args__ = (
+        UniqueConstraint("user_id", "pincode", name="uq_user_default_pincodes_user_pincode"),
+        Index("idx_user_default_pincodes_user_id", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    pincode: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[UserModel] = relationship(back_populates="default_pincodes")
 
 
 class ProductModel(Base):

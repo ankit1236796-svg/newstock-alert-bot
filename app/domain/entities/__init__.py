@@ -5,6 +5,7 @@ from app.domain.entities.models import (
     StockHistory,
     StockStatus,
     User,
+    UserDefaultPincode,
     UserProductTracking,
 )
 
@@ -12,6 +13,7 @@ __all__ = [
     "Marketplace",
     "Product",
     "ProductPincode",
+    "UserDefaultPincode",
     "StockHistory",
     "StockStatus",
     "User",

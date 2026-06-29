@@ -3,7 +3,14 @@ from dataclasses import replace
 
 import pytest
 
-from app.bot.routers.add_product import is_valid_pincode, is_valid_url, parse_pincodes
+from app.bot.routers.add_product import (
+    detect_marketplace,
+    format_bulk_summary,
+    is_valid_pincode,
+    is_valid_url,
+    parse_bulk_urls,
+    parse_pincodes,
+)
 from app.domain.entities import (
     Marketplace,
     Product,
@@ -12,7 +19,11 @@ from app.domain.entities import (
     User,
     UserProductTracking,
 )
-from app.services.products.add_product import AddProductCommand, AddProductService
+from app.services.products.add_product import (
+    AddProductCommand,
+    AddProductService,
+    infer_marketplace,
+)
 
 
 def test_parse_pincodes_accepts_comma_separated_unique_valid_pincodes() -> None:
@@ -146,3 +157,65 @@ async def _run_add_product_service_saves_product_pincodes_and_tracking() -> None
     assert added.product.current_status == StockStatus.UNKNOWN
     assert [item.pincode for item in pincodes.added] == ["560001", "110001"]
     assert trackings.created == [UserProductTracking(1, 1, 1)]
+
+
+def test_parse_pincodes_accepts_newline_separated_unique_valid_pincodes() -> None:
+    assert parse_pincodes("560001\n110001\n560001") == ["560001", "110001"]
+
+
+def test_parse_bulk_urls_filters_duplicates_invalid_and_unsupported_urls() -> None:
+    parsed = parse_bulk_urls(
+        "\n".join(
+            [
+                "https://www.amazon.in/example/dp/B01",
+                "notaurl",
+                "https://example.test/product",
+                "https://www.amazon.in/example/dp/B01",
+                "https://www.flipkart.com/product/p/itmx",
+            ]
+        )
+    )
+
+    assert parsed.urls == [
+        "https://www.amazon.in/example/dp/B01",
+        "https://www.flipkart.com/product/p/itmx",
+    ]
+    assert parsed.invalid_urls == ["notaurl"]
+    assert parsed.unsupported_urls == ["https://example.test/product"]
+    assert parsed.duplicate_urls == ["https://www.amazon.in/example/dp/B01"]
+
+
+def test_infer_marketplace_rejects_unknown_marketplace() -> None:
+    with pytest.raises(ValueError):
+        infer_marketplace("https://example.test/product")
+    assert detect_marketplace("https://www.croma.com/product") == Marketplace.CROMA
+
+
+def test_format_bulk_summary_includes_requested_counts() -> None:
+    assert format_bulk_summary(18, 3, 2, 1) == (
+        "✅ Added: 18\n⚠️ Already Tracked: 3\n❌ Invalid URLs: 2\n❌ Unsupported Websites: 1"
+    )
+
+
+def test_add_product_service_reports_already_tracked_product() -> None:
+    asyncio.run(_run_add_product_service_reports_already_tracked_product())
+
+
+async def _run_add_product_service_reports_already_tracked_product() -> None:
+    products = InMemoryProductRepository()
+    pincodes = InMemoryPincodeRepository()
+    trackings = InMemoryTrackingRepository()
+    service = AddProductService(products, pincodes, trackings)
+    command = AddProductCommand(
+        user=User(1, 1, None, None),
+        product_name="Console",
+        product_url="https://www.flipkart.com/product/p/itmx",
+        pincodes=["560001"],
+    )
+
+    first = await service.add_product(command)
+    second = await service.add_product(command)
+
+    assert not first.already_tracked
+    assert second.already_tracked
+    assert len(trackings.created) == 1

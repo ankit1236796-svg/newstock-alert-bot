@@ -11,6 +11,7 @@ from app.database.repositories import (
     SqlAlchemyProductPincodeRepository,
     SqlAlchemyProductRepository,
     SqlAlchemyStockHistoryRepository,
+    SqlAlchemyUserDefaultPincodeRepository,
     SqlAlchemyUserProductTrackingRepository,
     SqlAlchemyUserRepository,
 )
@@ -44,6 +45,7 @@ async def test_async_repositories_support_tracking_database_flow(session_factory
         products = SqlAlchemyProductRepository(session)
         pincodes = SqlAlchemyProductPincodeRepository(session)
         trackings = SqlAlchemyUserProductTrackingRepository(session)
+        default_pins = SqlAlchemyUserDefaultPincodeRepository(session)
         history = SqlAlchemyStockHistoryRepository(session)
 
         user = await users.upsert(User(None, 123456789, "alice", "Alice"))
@@ -63,6 +65,12 @@ async def test_async_repositories_support_tracking_database_flow(session_factory
         await pincodes.add(ProductPincode(None, product.id, "560001"))
         await pincodes.add(ProductPincode(None, product.id, "110001"))
         assert [pin.pincode for pin in await pincodes.list_for_product(product.id)] == [
+            "110001",
+            "560001",
+        ]
+        saved_pins = await default_pins.replace_for_user(user.id, ["560001", "110001"])
+        assert [pin.pincode for pin in saved_pins] == ["560001", "110001"]
+        assert [pin.pincode for pin in await default_pins.list_for_user(user.id)] == [
             "110001",
             "560001",
         ]
@@ -126,9 +134,11 @@ async def test_schema_has_expected_indexes_and_foreign_keys(session_factory) -> 
     assert "idx_products_current_status" in indexes["products"]
     assert "idx_product_pincodes_product_id" in indexes["product_pincodes"]
     assert "idx_user_product_tracking_user_id" in indexes["user_product_tracking"]
+    assert "idx_user_default_pincodes_user_id" in indexes["user_default_pincodes"]
     assert "idx_stock_history_product_id_changed_at" in indexes["stock_history"]
     assert foreign_keys["product_pincodes"] == 1
     assert foreign_keys["user_product_tracking"] == 2
+    assert foreign_keys["user_default_pincodes"] == 1
     assert foreign_keys["stock_history"] == 1
 
 

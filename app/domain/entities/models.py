@@ -67,3 +67,11 @@ class StockHistory:
     product_id: int
     status: StockStatus
     changed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UserDefaultPincode:
+    id: int | None
+    user_id: int
+    pincode: str
+    created_at: datetime | None = None
