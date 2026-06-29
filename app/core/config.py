@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     browser_headless: bool = True
     browser_timeout_seconds: PositiveInt = 30
     stock_check_interval_seconds: PositiveInt = 300
+    stock_check_worker_limit: PositiveInt = 2
+    stock_check_retry_attempts: PositiveInt = 2
 
 
 @lru_cache(maxsize=1)
