@@ -18,6 +18,7 @@ async def on_startup(bot: Bot, settings: Settings) -> None:
             BotCommand(command="help", description="Show available commands"),
             BotCommand(command="add", description="Add products to track"),
             BotCommand(command="pins", description="Save default PIN codes"),
+            BotCommand(command="check", description="Run a live product stock check"),
             BotCommand(command="ping", description="Check bot responsiveness"),
         ]
     )
