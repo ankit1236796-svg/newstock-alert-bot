@@ -98,3 +98,11 @@ def test_check_stock_uses_snapshot_for_base_marketplace_contract() -> None:
         assert result.raw_summary == "ok"
 
     asyncio.run(run_check())
+
+
+def test_amazon_adapter_normalizes_retry_and_delay_configuration() -> None:
+    adapter = AmazonMarketplaceAdapter(retries=-1, min_delay_ms=500, max_delay_ms=100)
+
+    assert adapter._retries == 0
+    assert adapter._min_delay_ms == 500
+    assert adapter._max_delay_ms == 500

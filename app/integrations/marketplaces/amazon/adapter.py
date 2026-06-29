@@ -1,23 +1,16 @@
 import asyncio
 import logging
+import random
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Final
+from time import perf_counter
+from typing import Final, Literal
 
-from playwright.async_api import (
-    Browser,
-    Page,
-    Playwright,
-    async_playwright,
-)
-from playwright.async_api import (
-    Error as PlaywrightError,
-)
-from playwright.async_api import (
-    TimeoutError as PlaywrightTimeoutError,
-)
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.domain.entities import Marketplace, StockStatus
 from app.integrations.marketplaces.base import (
@@ -33,6 +26,10 @@ _ASIN_RE: Final[re.Pattern[str]] = re.compile(
     r"/(?:dp|gp/product|product)/([A-Z0-9]{10})(?:[/?]|$)", re.I
 )
 _PRICE_RE: Final[re.Pattern[str]] = re.compile(r"(?:₹|INR)\s*([0-9,]+(?:\.\d{1,2})?)")
+_DEFAULT_USER_AGENT: Final[str] = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,25 +58,32 @@ class PlaywrightBrowserPool:
     headless: bool = True
     max_browsers: int = 1
     launch_timeout_ms: int = 30_000
+    user_agent: str = _DEFAULT_USER_AGENT
     _playwright: Playwright | None = field(default=None, init=False, repr=False)
     _browsers: asyncio.Queue[Browser] = field(init=False, repr=False)
     _created: int = field(default=0, init=False, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.max_browsers = max(1, self.max_browsers)
         self._browsers = asyncio.Queue(maxsize=self.max_browsers)
 
     async def acquire(self) -> Browser:
         async with self._lock:
             if self._playwright is None:
                 self._playwright = await async_playwright().start()
-            if not self._browsers.empty():
+            while not self._browsers.empty():
                 browser = await self._browsers.get()
                 if browser.is_connected():
+                    logger.info("amazon_browser_reused", extra={"pool_size": self._created})
                     return browser
                 self._created -= 1
             if self._created < self.max_browsers:
                 self._created += 1
+                logger.info(
+                    "amazon_browser_launching",
+                    extra={"pool_size": self._created, "max_browsers": self.max_browsers},
+                )
                 try:
                     return await self._playwright.chromium.launch(
                         headless=self.headless, timeout=self.launch_timeout_ms
@@ -89,6 +93,7 @@ class PlaywrightBrowserPool:
                     raise
         browser = await self._browsers.get()
         if browser.is_connected():
+            logger.info("amazon_browser_reused", extra={"pool_size": self._created})
             return browser
         async with self._lock:
             self._created -= 1
@@ -110,6 +115,7 @@ class PlaywrightBrowserPool:
             await self._playwright.stop()
             self._playwright = None
         self._created = 0
+        logger.info("amazon_browser_pool_closed")
 
 
 class AmazonMarketplaceAdapter(BaseMarketplace):
@@ -122,10 +128,20 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         headless: bool = True,
         timeout_ms: int = 15_000,
         retries: int = 2,
+        retry_backoff_seconds: float = 0.75,
+        min_delay_ms: int = 250,
+        max_delay_ms: int = 1_500,
+        user_agent: str = _DEFAULT_USER_AGENT,
     ) -> None:
-        self._browser_pool = browser_pool or PlaywrightBrowserPool(headless=headless)
+        self._browser_pool = browser_pool or PlaywrightBrowserPool(
+            headless=headless, user_agent=user_agent
+        )
         self._timeout_ms = timeout_ms
-        self._retries = retries
+        self._retries = max(0, retries)
+        self._retry_backoff_seconds = retry_backoff_seconds
+        self._min_delay_ms = min_delay_ms
+        self._max_delay_ms = max(min_delay_ms, max_delay_ms)
+        self._user_agent = user_agent
 
     async def close(self) -> None:
         await self._browser_pool.close()
@@ -153,7 +169,7 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             except (PlaywrightTimeoutError, PlaywrightError, TimeoutError, OSError) as exc:
                 last_error = exc
                 logger.warning(
-                    "amazon_check_retryable_failure",
+                    "amazon_check_retry_attempt",
                     extra={
                         "attempt": attempt,
                         "max_attempts": self._retries + 1,
@@ -163,69 +179,90 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
                 )
                 if attempt > self._retries:
                     break
-                await asyncio.sleep(0.5 * attempt)
+                delay = self._retry_backoff_seconds * (2 ** (attempt - 1))
+                delay += random.uniform(0, self._retry_backoff_seconds)
+                await asyncio.sleep(delay)
+        logger.error("amazon_check_failed", extra={"product_url": product_url})
         raise RuntimeError("Amazon product check failed after retries") from last_error
 
     async def _check_product_once(
         self, product_url: str, pincodes: tuple[str, ...], attempt: int
     ) -> AmazonProductSnapshot:
         browser = await self._browser_pool.acquire()
-        context = await browser.new_context(locale="en-IN")
-        page = await context.new_page()
-        page.set_default_timeout(self._timeout_ms)
+        context: BrowserContext | None = None
+        started = perf_counter()
         try:
+            context = await browser.new_context(locale="en-IN", user_agent=self._user_agent)
+            page = await context.new_page()
+            page.set_default_timeout(self._timeout_ms)
+            page.set_default_navigation_timeout(self._timeout_ms)
             logger.info(
                 "amazon_check_started",
                 extra={"product_url": product_url, "pincodes": list(pincodes), "attempt": attempt},
             )
+            await self._human_delay()
             await page.goto(product_url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            await page.wait_for_load_state("networkidle", timeout=self._timeout_ms)
+            await self._safe_load_state(page, "networkidle")
             snapshot = await self._extract_snapshot(page, product_url, pincodes)
             logger.info(
-                "amazon_check_completed",
+                "amazon_check_succeeded",
                 extra={
                     "product_id": snapshot.product_id,
                     "status": snapshot.current_stock_status.value,
                     "pincodes": list(pincodes),
+                    "duration_seconds": round(perf_counter() - started, 3),
                 },
             )
             return snapshot
         finally:
-            await context.close()
+            if context is not None:
+                await context.close()
             await self._browser_pool.release(browser)
 
     async def _extract_snapshot(
         self, page: Page, product_url: str, pincodes: tuple[str, ...]
     ) -> AmazonProductSnapshot:
-        text = await page.locator("body").inner_text(timeout=self._timeout_ms)
-        name = await self._first_text(page, ["#productTitle", "#title", "h1"])
-        image = await self._first_attribute(page, ["#landingImage", "#imgBlkFront"], "src")
+        text = await self._safe_body_text(page)
+        name = await self._first_text(page, ["#productTitle", "#title", "#titleSection h1", "h1"])
+        image = await self._first_attribute(
+            page, ["#landingImage", "#imgBlkFront", "#main-image", "img[data-old-hires]"], "src"
+        )
         seller = await self._first_text(
             page,
-            ["#sellerProfileTriggerId", "#merchant-info", "#tabular-buybox .tabular-buybox-text"],
+            [
+                "#sellerProfileTriggerId",
+                "#merchant-info",
+                "#tabular-buybox .tabular-buybox-text",
+                "#buybox-tabular .tabular-buybox-text",
+            ],
         )
         price_text = await self._first_text(
-            page, [".a-price .a-offscreen", "#priceblock_ourprice", "#priceblock_dealprice"]
+            page,
+            [
+                ".a-price .a-offscreen",
+                "#corePriceDisplay_desktop_feature_div .a-offscreen",
+                "#priceblock_ourprice",
+                "#priceblock_dealprice",
+                "#apex_desktop .a-offscreen",
+            ],
         )
         price_paise = self._parse_price(price_text or text)
         status = self._stock_status(text)
         product_id = self._product_id(product_url) or await self._first_attribute(
-            page, ["input#ASIN"], "value"
+            page, ["input#ASIN", "input[name='ASIN']"], "value"
         )
-        deliveries = []
-        for pincode in pincodes:
-            deliveries.append(await self._check_delivery_for_pin(page, pincode))
+        deliveries = [await self._check_delivery_for_pin(page, pin) for pin in pincodes]
         return AmazonProductSnapshot(
-            product_name=name,
-            marketplace=self.marketplace,
-            product_id=product_id,
-            product_image=image,
-            seller_name=seller,
-            current_price_paise=price_paise,
-            current_stock_status=status,
-            delivery_availability=tuple(deliveries),
-            last_checked=datetime.now(UTC),
-            raw_summary=self._summary(name, product_id, price_paise, status),
+            name,
+            self.marketplace,
+            product_id,
+            image,
+            seller,
+            price_paise,
+            status,
+            tuple(deliveries),
+            datetime.now(UTC),
+            self._summary(name, product_id, price_paise, status),
         )
 
     async def _check_delivery_for_pin(self, page: Page, pincode: str) -> AmazonDeliveryAvailability:
@@ -233,41 +270,76 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             "#contextualIngressPtLabel_deliveryShortLine",
             "#deliveryBlockMessage",
             "#mir-layout-DELIVERY_BLOCK",
+            "#ddmDeliveryMessage",
         ]
-        before = " ".join(filter(None, [await self._first_text(page, selectors)]))
+        before = await self._first_text(page, selectors)
         try:
-            await page.locator(
-                "#contextualIngressPtLabel_deliveryShortLine, #deliver-to-address-text"
-            ).first.click(timeout=3_000)
-            await page.locator("#GLUXZipUpdateInput").fill(pincode, timeout=3_000)
-            await page.locator("#GLUXZipUpdate").click(timeout=3_000)
-            await page.wait_for_timeout(1_000)
-        except PlaywrightError:
-            logger.info("amazon_delivery_pin_form_unavailable", extra={"pincode": pincode})
+            trigger = page.locator(
+                "#contextualIngressPtLabel_deliveryShortLine, #deliver-to-address-text, "
+                "#nav-global-location-popover-link"
+            ).first
+            if await trigger.count():
+                await trigger.click(timeout=min(3_000, self._timeout_ms))
+                await self._human_delay()
+                await page.locator("#GLUXZipUpdateInput, input[name='zipCode']").first.fill(
+                    pincode, timeout=min(3_000, self._timeout_ms)
+                )
+                await page.locator(
+                    "#GLUXZipUpdate, input[aria-labelledby='GLUXZipUpdate']"
+                ).first.click(timeout=min(3_000, self._timeout_ms))
+                await self._human_delay()
+            else:
+                logger.info("amazon_delivery_pin_trigger_unavailable", extra={"pincode": pincode})
+        except PlaywrightError as exc:
+            logger.info(
+                "amazon_delivery_pin_form_unavailable",
+                extra={"pincode": pincode, "error": repr(exc)},
+            )
         message = await self._first_text(page, selectors) or before
         unavailable = self._delivery_unavailable(message or "")
-        return AmazonDeliveryAvailability(
-            pincode=pincode, is_available=not unavailable, message=message
-        )
+        return AmazonDeliveryAvailability(pincode, not unavailable, message)
+
+    async def _human_delay(self) -> None:
+        await asyncio.sleep(random.uniform(self._min_delay_ms, self._max_delay_ms) / 1000)
+
+    async def _safe_load_state(
+        self, page: Page, state: Literal["domcontentloaded", "load", "networkidle"]
+    ) -> None:
+        try:
+            await page.wait_for_load_state(state, timeout=min(self._timeout_ms, 5_000))
+        except PlaywrightTimeoutError:
+            logger.info("amazon_load_state_timeout", extra={"state": state})
+
+    async def _safe_body_text(self, page: Page) -> str:
+        try:
+            return await page.locator("body").inner_text(timeout=self._timeout_ms)
+        except PlaywrightError:
+            return ""
 
     @staticmethod
     async def _first_text(page: Page, selectors: list[str]) -> str | None:
         for selector in selectors:
-            locator = page.locator(selector).first
-            if await locator.count():
-                text = (await locator.inner_text()).strip()
-                if text:
-                    return " ".join(text.split())
+            try:
+                locator = page.locator(selector).first
+                if await locator.count():
+                    text = (await locator.inner_text(timeout=2_000)).strip()
+                    if text:
+                        return " ".join(text.split())
+            except PlaywrightError:
+                continue
         return None
 
     @staticmethod
     async def _first_attribute(page: Page, selectors: list[str], name: str) -> str | None:
         for selector in selectors:
-            locator = page.locator(selector).first
-            if await locator.count():
-                value = await locator.get_attribute(name)
-                if value:
-                    return value
+            try:
+                locator = page.locator(selector).first
+                if await locator.count():
+                    value = await locator.get_attribute(name, timeout=2_000)
+                    if value:
+                        return value
+            except PlaywrightError:
+                continue
         return None
 
     @staticmethod

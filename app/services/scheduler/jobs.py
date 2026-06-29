@@ -60,21 +60,34 @@ class BackgroundStockChecker:
             products = await uow.products.list_active_tracked()
         logger.info("stock_scheduler_job_started", extra={"product_count": len(products)})
         semaphore = asyncio.Semaphore(self._worker_limit)
-        await asyncio.gather(*(self._check_with_limit(product, semaphore) for product in products))
+        durations = await asyncio.gather(
+            *(self._check_with_limit(product, semaphore) for product in products),
+            return_exceptions=True,
+        )
+        successful_durations = [duration for duration in durations if isinstance(duration, float)]
         duration = perf_counter() - started
+        average_duration = (
+            sum(successful_durations) / len(successful_durations) if successful_durations else 0.0
+        )
         logger.info(
             "stock_scheduler_job_completed",
-            extra={"product_count": len(products), "duration_seconds": round(duration, 3)},
+            extra={
+                "product_count": len(products),
+                "duration_seconds": round(duration, 3),
+                "average_check_duration_seconds": round(average_duration, 3),
+            },
         )
 
-    async def _check_with_limit(self, product: Product, semaphore: asyncio.Semaphore) -> None:
+    async def _check_with_limit(
+        self, product: Product, semaphore: asyncio.Semaphore
+    ) -> float | None:
         async with semaphore:
-            await self._check_product(product)
+            return await self._check_product(product)
 
-    async def _check_product(self, product: Product) -> None:
+    async def _check_product(self, product: Product) -> float | None:
         if product.id is None:
             logger.error("stock_scheduler_product_missing_id")
-            return
+            return None
         started = perf_counter()
         try:
             async with self._uow_factory() as uow:
@@ -85,7 +98,7 @@ class BackgroundStockChecker:
                     "stock_scheduler_product_skipped",
                     extra={"product_id": product.id, "reason": "no_pincodes"},
                 )
-                return
+                return None
             if product.marketplace is not Marketplace.AMAZON:
                 logger.info(
                     "stock_scheduler_product_skipped",
@@ -95,7 +108,7 @@ class BackgroundStockChecker:
                         "reason": "unsupported_marketplace",
                     },
                 )
-                return
+                return None
             snapshot = await self._amazon_adapter.check_product(product.product_url, pincodes)
             checked_product = replace(
                 product,
@@ -122,15 +135,17 @@ class BackgroundStockChecker:
                 await uow.stock_history.record(
                     StockHistory(None, product.id, snapshot.current_stock_status, datetime.now(UTC))
                 )
+            duration = perf_counter() - started
             logger.info(
                 "stock_scheduler_product_checked",
                 extra={
                     "product_id": product.id,
                     "status": snapshot.current_stock_status.value,
                     "pincode_count": len(pincodes),
-                    "duration_seconds": round(perf_counter() - started, 3),
+                    "duration_seconds": round(duration, 3),
                 },
             )
+            return duration
         except Exception as exc:
             logger.exception(
                 "stock_scheduler_product_error",
@@ -140,3 +155,4 @@ class BackgroundStockChecker:
                     "duration_seconds": round(perf_counter() - started, 3),
                 },
             )
+            return None
