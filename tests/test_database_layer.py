@@ -1,0 +1,154 @@
+# ruff: noqa: ANN001, ANN201, ANN202
+from datetime import UTC, datetime
+
+import pytest
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.database.models import Base
+from app.database.repositories import (
+    SqlAlchemyProductPincodeRepository,
+    SqlAlchemyProductRepository,
+    SqlAlchemyStockHistoryRepository,
+    SqlAlchemyUserProductTrackingRepository,
+    SqlAlchemyUserRepository,
+)
+from app.domain.entities import (
+    Marketplace,
+    Product,
+    ProductPincode,
+    StockHistory,
+    StockStatus,
+    User,
+    UserProductTracking,
+)
+
+
+@pytest.fixture
+async def session_factory():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.execute(text("PRAGMA foreign_keys=ON"))
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield factory
+    finally:
+        await engine.dispose()
+
+
+async def test_async_repositories_support_tracking_database_flow(session_factory) -> None:
+    async with session_factory() as session:
+        users = SqlAlchemyUserRepository(session)
+        products = SqlAlchemyProductRepository(session)
+        pincodes = SqlAlchemyProductPincodeRepository(session)
+        trackings = SqlAlchemyUserProductTrackingRepository(session)
+        history = SqlAlchemyStockHistoryRepository(session)
+
+        user = await users.upsert(User(None, 123456789, "alice", "Alice"))
+        product = await products.create(
+            Product(
+                None,
+                "B0TEST",
+                Marketplace.AMAZON,
+                "https://example.test/product/B0TEST",
+                "Test Product",
+                StockStatus.OUT_OF_STOCK,
+            )
+        )
+        assert user.id is not None
+        assert product.id is not None
+
+        await pincodes.add(ProductPincode(None, product.id, "560001"))
+        await pincodes.add(ProductPincode(None, product.id, "110001"))
+        assert [pin.pincode for pin in await pincodes.list_for_product(product.id)] == [
+            "110001",
+            "560001",
+        ]
+
+        tracking = await trackings.create(UserProductTracking(None, user.id, product.id))
+        notified_at = datetime(2026, 6, 29, 12, tzinfo=UTC)
+        updated_tracking = await trackings.update_notification_state(
+            UserProductTracking(
+                tracking.id,
+                user.id,
+                product.id,
+                True,
+                StockStatus.IN_STOCK,
+                notified_at,
+                tracking.created_at,
+            )
+        )
+        assert updated_tracking.last_notified_status == StockStatus.IN_STOCK
+        assert updated_tracking.last_notified_at == notified_at
+
+        await history.record(StockHistory(None, product.id, StockStatus.OUT_OF_STOCK))
+        await history.record(StockHistory(None, product.id, StockStatus.IN_STOCK))
+        assert [item.status for item in await history.list_for_product(product.id)] == [
+            StockStatus.OUT_OF_STOCK,
+            StockStatus.IN_STOCK,
+        ]
+
+        product = await products.update(
+            Product(
+                product.id,
+                product.product_id,
+                product.marketplace,
+                product.product_url,
+                product.product_name,
+                StockStatus.IN_STOCK,
+                notified_at,
+                product.created_at,
+            )
+        )
+        assert product.current_status == StockStatus.IN_STOCK
+        assert (await products.get_by_marketplace_product_id("amazon", "B0TEST")) == product
+
+
+async def test_schema_has_expected_indexes_and_foreign_keys(session_factory) -> None:
+    async with session_factory() as session:
+
+        def inspect_schema(connection):
+            inspector = inspect(connection)
+            indexes = {
+                table: {idx["name"] for idx in inspector.get_indexes(table)}
+                for table in inspector.get_table_names()
+            }
+            foreign_keys = {
+                table: len(inspector.get_foreign_keys(table))
+                for table in inspector.get_table_names()
+            }
+            return indexes, foreign_keys
+
+        indexes, foreign_keys = await session.run_sync(inspect_schema)
+
+    assert "idx_products_current_status" in indexes["products"]
+    assert "idx_product_pincodes_product_id" in indexes["product_pincodes"]
+    assert "idx_user_product_tracking_user_id" in indexes["user_product_tracking"]
+    assert "idx_stock_history_product_id_changed_at" in indexes["stock_history"]
+    assert foreign_keys["product_pincodes"] == 1
+    assert foreign_keys["user_product_tracking"] == 2
+    assert foreign_keys["stock_history"] == 1
+
+
+async def test_duplicate_tracking_is_prevented(session_factory) -> None:
+    async with session_factory() as session:
+        users = SqlAlchemyUserRepository(session)
+        products = SqlAlchemyProductRepository(session)
+        trackings = SqlAlchemyUserProductTrackingRepository(session)
+        user = await users.create(User(None, 42, None, None))
+        product = await products.create(
+            Product(
+                None,
+                "SKU",
+                Marketplace.FLIPKART,
+                "https://example.test/sku",
+                "SKU",
+                StockStatus.OUT_OF_STOCK,
+            )
+        )
+        assert user.id is not None and product.id is not None
+        await trackings.create(UserProductTracking(None, user.id, product.id))
+        with pytest.raises(IntegrityError):
+            await trackings.create(UserProductTracking(None, user.id, product.id))

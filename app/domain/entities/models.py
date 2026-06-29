@@ -27,23 +27,19 @@ class User:
     telegram_user_id: int
     username: str | None
     first_name: str | None
-    last_name: str | None
-    is_active: bool
     created_at: datetime | None = None
-    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Product:
     id: int | None
-    user_id: int
+    product_id: str
     marketplace: Marketplace
     product_url: str
-    display_name: str
-    target_price_paise: int | None
-    is_active: bool
+    product_name: str
+    current_status: StockStatus
+    last_checked: datetime | None = None
     created_at: datetime | None = None
-    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,16 +47,23 @@ class ProductPincode:
     id: int | None
     product_id: int
     pincode: str
-    is_active: bool
     created_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class StockCheck:
+class UserProductTracking:
+    id: int | None
+    user_id: int
+    product_id: int
+    notifications_enabled: bool = True
+    last_notified_status: StockStatus | None = None
+    last_notified_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StockHistory:
     id: int | None
     product_id: int
-    pincode: str
     status: StockStatus
-    price_paise: int | None
-    raw_summary: str | None
-    checked_at: datetime | None = None
+    changed_at: datetime | None = None
