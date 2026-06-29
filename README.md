@@ -22,7 +22,7 @@ app/
   database/                    SQLite connection lifecycle, schema creation, and repository implementations.
   domain/entities/             pure typed dataclasses and enums for users, products, pincodes, and stock checks.
   domain/repositories/         repository protocols that keep business logic independent from SQLite.
-  integrations/marketplaces/   shared marketplace client contract for future website-specific adapters.
+  integrations/marketplaces/   shared marketplace adapter contracts for future website-specific integrations.
   observability/               structured logging setup for container-friendly production logs.
   services/browser/            Playwright browser session lifecycle for future scraping/checking workflows.
   services/notifications/      notification protocol for Telegram alert delivery.
@@ -38,7 +38,7 @@ app/
 - `app/domain/entities/models.py` defines framework-independent business objects for users, products, product pincodes, and stock checks.
 - `app/domain/repositories/protocols.py` defines async repository contracts for dependency inversion and testability.
 - `app/bot/factory.py` creates aiogram primitives without registering commands yet, keeping command implementation out of this architecture-only milestone.
-- `app/integrations/marketplaces/base.py` defines the future marketplace adapter contract without implementing any shopping website.
+- `app/integrations/marketplaces/base.py` defines request/result dataclasses plus the async marketplace adapter protocol without implementing any shopping website.
 - `app/services/browser/session.py` isolates Playwright browser lifecycle so marketplace clients can share robust browser setup later.
 - `app/services/scheduler/runner.py` wires APScheduler to an async recurring job with single-instance protection to avoid overlapping stock checks.
 - `app/services/scheduler/jobs.py` contains a no-op stock-check placeholder until marketplace clients are implemented.
