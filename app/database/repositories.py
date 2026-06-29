@@ -5,6 +5,7 @@ from app.database.models import (
     ProductModel,
     ProductPincodeModel,
     StockHistoryModel,
+    UserDefaultPincodeModel,
     UserModel,
     UserProductTrackingModel,
 )
@@ -15,6 +16,7 @@ from app.domain.entities import (
     StockHistory,
     StockStatus,
     User,
+    UserDefaultPincode,
     UserProductTracking,
 )
 
@@ -71,6 +73,34 @@ class SqlAlchemyUserRepository:
         return User(
             model.id, model.telegram_user_id, model.username, model.first_name, model.created_at
         )
+
+
+class SqlAlchemyUserDefaultPincodeRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_for_user(self, user_id: int) -> list[UserDefaultPincode]:
+        result = await self._session.execute(
+            select(UserDefaultPincodeModel)
+            .where(UserDefaultPincodeModel.user_id == user_id)
+            .order_by(UserDefaultPincodeModel.pincode)
+        )
+        return [self._to_entity(model) for model in result.scalars()]
+
+    async def replace_for_user(self, user_id: int, pincodes: list[str]) -> list[UserDefaultPincode]:
+        await self._session.execute(
+            delete(UserDefaultPincodeModel).where(UserDefaultPincodeModel.user_id == user_id)
+        )
+        models = [UserDefaultPincodeModel(user_id=user_id, pincode=pincode) for pincode in pincodes]
+        self._session.add_all(models)
+        await self._session.commit()
+        for model in models:
+            await self._session.refresh(model)
+        return [self._to_entity(model) for model in models]
+
+    @staticmethod
+    def _to_entity(model: UserDefaultPincodeModel) -> UserDefaultPincode:
+        return UserDefaultPincode(model.id, model.user_id, model.pincode, model.created_at)
 
 
 class SqlAlchemyProductRepository:
@@ -290,6 +320,7 @@ class SqlAlchemyStockHistoryRepository:
 
 # Backwards-compatible aliases for the old SQLite repository names.
 SqliteUserRepository = SqlAlchemyUserRepository
+SqliteUserDefaultPincodeRepository = SqlAlchemyUserDefaultPincodeRepository
 SqliteProductRepository = SqlAlchemyProductRepository
 SqliteProductPincodeRepository = SqlAlchemyProductPincodeRepository
 SqliteStockHistoryRepository = SqlAlchemyStockHistoryRepository

@@ -29,6 +29,7 @@ class AddProductCommand:
 class AddedProduct:
     product: Product
     pincodes: list[str]
+    already_tracked: bool = False
 
 
 class AddProductService:
@@ -67,12 +68,15 @@ class AddProductService:
         if product.id is None:
             raise ValueError("Product repository returned an unpersisted product")
 
+        existing_tracking = await self._trackings.get(command.user.id, product.id)
+        already_tracked = existing_tracking is not None
+        if already_tracked:
+            return AddedProduct(product, command.pincodes, already_tracked=True)
+
         for pincode in command.pincodes:
             await self._pincodes.add(ProductPincode(None, product.id, pincode))
 
-        existing_tracking = await self._trackings.get(command.user.id, product.id)
-        if existing_tracking is None:
-            await self._trackings.create(UserProductTracking(None, command.user.id, product.id))
+        await self._trackings.create(UserProductTracking(None, command.user.id, product.id))
 
         return AddedProduct(product, command.pincodes)
 
@@ -97,4 +101,4 @@ def infer_marketplace(product_url: str) -> Marketplace:
     for host_fragment, marketplace in marketplace_by_host.items():
         if host_fragment in host:
             return marketplace
-    return Marketplace.AMAZON
+    raise ValueError("Unsupported marketplace")

@@ -16,6 +16,8 @@ async def on_startup(bot: Bot, settings: Settings) -> None:
         [
             BotCommand(command="start", description="Register and start the bot"),
             BotCommand(command="help", description="Show available commands"),
+            BotCommand(command="add", description="Add products to track"),
+            BotCommand(command="pins", description="Save default PIN codes"),
             BotCommand(command="ping", description="Check bot responsiveness"),
         ]
     )

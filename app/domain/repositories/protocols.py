@@ -1,6 +1,13 @@
 from typing import Protocol
 
-from app.domain.entities import Product, ProductPincode, StockHistory, User, UserProductTracking
+from app.domain.entities import (
+    Product,
+    ProductPincode,
+    StockHistory,
+    User,
+    UserDefaultPincode,
+    UserProductTracking,
+)
 
 
 class UserRepository(Protocol):
@@ -24,6 +31,13 @@ class ProductPincodeRepository(Protocol):
     async def add(self, pincode: ProductPincode) -> ProductPincode: ...
     async def list_for_product(self, product_id: int) -> list[ProductPincode]: ...
     async def remove(self, product_id: int, pincode: str) -> None: ...
+
+
+class UserDefaultPincodeRepository(Protocol):
+    async def list_for_user(self, user_id: int) -> list[UserDefaultPincode]: ...
+    async def replace_for_user(
+        self, user_id: int, pincodes: list[str]
+    ) -> list[UserDefaultPincode]: ...
 
 
 class UserProductTrackingRepository(Protocol):
