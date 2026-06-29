@@ -4,6 +4,9 @@ from pathlib import Path
 def test_expected_project_directories_exist() -> None:
     expected = [
         "app/bot",
+        "app/bot/routers",
+        "app/bot/middlewares",
+        "app/bot/lifecycle",
         "app/core",
         "app/database",
         "app/domain/entities",
