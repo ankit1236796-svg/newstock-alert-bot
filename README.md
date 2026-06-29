@@ -152,3 +152,33 @@ python -m app.healthcheck
 pytest
 ruff check .
 ```
+
+## Ubuntu VPS deployment
+
+For a complete production runbook, see [`DEPLOYMENT.md`](DEPLOYMENT.md). The short path on Ubuntu 24.04 LTS is:
+
+```bash
+sudo apt update
+sudo apt install -y git docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+cd /opt
+git clone <REPOSITORY_URL> newstock-alert-bot
+cd newstock-alert-bot
+cp .env.example .env
+chmod 600 .env
+# edit .env and set BOT_TOKEN
+./scripts/deploy.sh
+```
+
+Production helper scripts:
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/deploy.sh` | Validate `.env`, secure local files, build, start, and show service status. |
+| `scripts/update.sh` | Pull the latest fast-forward changes, rebuild, and recreate the service. |
+| `scripts/restart.sh` | Restart the bot service. |
+| `scripts/stop.sh` | Stop and remove Compose-managed containers. |
+| `scripts/logs.sh` | Follow bot logs. Set `TAIL=500` to change the initial log line count. |
+| `scripts/backup.sh` | Create a timestamped backup of `/app/data` under `backups/`. |
+| `scripts/restore.sh` | Restore a backup tarball into the Docker data volume and restart the bot. |
+
+Production defaults include a non-root container user, a read-only container filesystem, dropped Linux capabilities, `no-new-privileges`, JSON log rotation, a persistent Docker volume for SQLite, Docker health checks, and startup verification for the database, scheduler, browser pool, and Telegram bot token.

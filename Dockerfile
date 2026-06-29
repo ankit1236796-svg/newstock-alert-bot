@@ -39,13 +39,15 @@ RUN python -m pip install --no-cache-dir /wheels/*.whl \
     && python -m playwright install --with-deps chromium \
     && rm -rf /wheels /root/.cache/pip \
     && mkdir -p /app/data \
-    && chown -R bot:bot /app /ms-playwright
+    && chown -R bot:bot /app /ms-playwright \
+    && chmod 755 /app \
+    && chmod 700 /app/data
 
 USER bot
 
 VOLUME ["/app/data"]
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
     CMD python -m app.healthcheck
 
 CMD ["python", "-m", "app"]
