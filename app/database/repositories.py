@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +30,12 @@ def _status(value: str | StockStatus | None) -> StockStatus | None:
 
 def _marketplace(value: str | Marketplace) -> Marketplace:
     return Marketplace(value)
+
+
+def _utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 class SqlAlchemyUserRepository:
@@ -73,7 +80,11 @@ class SqlAlchemyUserRepository:
     @staticmethod
     def _to_entity(model: UserModel) -> User:
         return User(
-            model.id, model.telegram_user_id, model.username, model.first_name, model.created_at
+            model.id,
+            model.telegram_user_id,
+            model.username,
+            model.first_name,
+            _utc_datetime(model.created_at),
         )
 
 
@@ -168,10 +179,7 @@ class SqlAlchemyProductRepository:
 
     async def list_active_tracked(self) -> list[Product]:
         result = await self._session.execute(
-            select(ProductModel)
-            .join(UserProductTrackingModel)
-            .distinct()
-            .order_by(ProductModel.id)
+            select(ProductModel).join(UserProductTrackingModel).distinct().order_by(ProductModel.id)
         )
         return [self._to_entity(model) for model in result.scalars()]
 
@@ -184,8 +192,8 @@ class SqlAlchemyProductRepository:
             model.product_url,
             model.product_name,
             StockStatus(model.current_status),
-            model.last_checked,
-            model.created_at,
+            _utc_datetime(model.last_checked),
+            _utc_datetime(model.created_at),
             model.current_price_paise,
             json.loads(model.delivery_availability_by_pincode or "{}"),
         )
@@ -306,8 +314,8 @@ class SqlAlchemyUserProductTrackingRepository:
             model.product_id,
             model.notifications_enabled,
             _status(model.last_notified_status),
-            model.last_notified_at,
-            model.created_at,
+            _utc_datetime(model.last_notified_at),
+            _utc_datetime(model.created_at),
         )
 
 
@@ -336,7 +344,9 @@ class SqlAlchemyStockHistoryRepository:
 
     @staticmethod
     def _to_entity(model: StockHistoryModel) -> StockHistory:
-        return StockHistory(model.id, model.product_id, StockStatus(model.status), model.changed_at)
+        return StockHistory(
+            model.id, model.product_id, StockStatus(model.status), _utc_datetime(model.changed_at)
+        )
 
 
 # Backwards-compatible aliases for the old SQLite repository names.

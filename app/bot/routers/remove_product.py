@@ -4,7 +4,13 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InaccessibleMessage,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from app.domain.repositories import (
     ProductPincodeRepository,
@@ -192,7 +198,7 @@ async def _edit_or_answer(
     text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    if callback.message is not None:
+    if callback.message is not None and not isinstance(callback.message, InaccessibleMessage):
         await callback.message.edit_text(text, reply_markup=reply_markup)
-    else:
+    elif callback.bot is not None:
         await callback.bot.send_message(callback.from_user.id, text, reply_markup=reply_markup)

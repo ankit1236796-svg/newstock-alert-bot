@@ -21,7 +21,6 @@ dev = [
     "ruff>=0.5,<1.0",
     "mypy>=1.10,<2.0",
     "pytest>=8.2,<9.0",
-    "pytest-asyncio>=0.23,<1.0",
 ]
 
 [build-system]
@@ -37,7 +36,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "ANN"]
-ignore = ["ANN101"]
+ignore = []
 
 [tool.mypy]
 python_version = "3.12"
@@ -45,7 +44,6 @@ strict = true
 plugins = []
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [[tool.mypy.overrides]]

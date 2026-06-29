@@ -215,9 +215,11 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             )
             return snapshot
         finally:
-            if context is not None:
-                await context.close()
-            await self._browser_pool.release(browser)
+            try:
+                if context is not None:
+                    await context.close()
+            finally:
+                await self._browser_pool.release(browser)
 
     async def _extract_snapshot(
         self, page: Page, product_url: str, pincodes: tuple[str, ...]
