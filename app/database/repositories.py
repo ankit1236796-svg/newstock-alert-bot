@@ -1,3 +1,5 @@
+import json
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,6 +117,10 @@ class SqlAlchemyProductRepository:
             product_name=product.product_name,
             current_status=product.current_status.value,
             last_checked=product.last_checked,
+            current_price_paise=product.current_price_paise,
+            delivery_availability_by_pincode=json.dumps(
+                product.delivery_availability_by_pincode or {}
+            ),
         )
         self._session.add(model)
         await self._session.commit()
@@ -148,6 +154,10 @@ class SqlAlchemyProductRepository:
         model.product_name = product.product_name
         model.current_status = product.current_status.value
         model.last_checked = product.last_checked
+        model.current_price_paise = product.current_price_paise
+        model.delivery_availability_by_pincode = json.dumps(
+            product.delivery_availability_by_pincode or {}
+        )
         await self._session.commit()
         await self._session.refresh(model)
         return self._to_entity(model)
@@ -176,6 +186,8 @@ class SqlAlchemyProductRepository:
             StockStatus(model.current_status),
             model.last_checked,
             model.created_at,
+            model.current_price_paise,
+            json.loads(model.delivery_availability_by_pincode or "{}"),
         )
 
 

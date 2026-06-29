@@ -1,10 +1,18 @@
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-from app.domain.entities import Marketplace, StockStatus
 
 _STATUS_LEN: Final = 20
 _MARKETPLACE_LEN: Final = 40
@@ -57,11 +65,13 @@ class ProductModel(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    marketplace: Mapped[Marketplace] = mapped_column(String(_MARKETPLACE_LEN), nullable=False)
+    marketplace: Mapped[str] = mapped_column(String(_MARKETPLACE_LEN), nullable=False)
     product_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     product_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    current_status: Mapped[StockStatus] = mapped_column(String(_STATUS_LEN), nullable=False)
+    current_status: Mapped[str] = mapped_column(String(_STATUS_LEN), nullable=False)
     last_checked: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_price_paise: Mapped[int | None] = mapped_column(Integer)
+    delivery_availability_by_pincode: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     pincodes: Mapped[list["ProductPincodeModel"]] = relationship(
@@ -108,7 +118,7 @@ class UserProductTrackingModel(Base):
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False
     )
     notifications_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
-    last_notified_status: Mapped[StockStatus | None] = mapped_column(String(_STATUS_LEN))
+    last_notified_status: Mapped[str | None] = mapped_column(String(_STATUS_LEN))
     last_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -127,7 +137,7 @@ class StockHistoryModel(Base):
     product_id: Mapped[int] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False
     )
-    status: Mapped[StockStatus] = mapped_column(String(_STATUS_LEN), nullable=False)
+    status: Mapped[str] = mapped_column(String(_STATUS_LEN), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     product: Mapped[ProductModel] = relationship(back_populates="stock_history")
