@@ -150,6 +150,7 @@ def test_format_tracked_products_numbers_and_escapes_products() -> None:
     )
 
     assert "1. <b>Console &lt;Pro&gt;</b>" in message
+    assert "Marketplace: Amazon" in message
     assert "URL: https://example.test/sku?name=&lt;Console&gt;" in message
     assert "Status: Unknown" in message
     assert "PIN Codes: 560001, 110001" in message
