@@ -2,14 +2,14 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
 
-from app.database.repositories import SqlAlchemyUserRepository
 from app.domain.entities import User
+from app.domain.repositories import UserRepository
 
 router = Router(name="commands")
 
 
 @router.message(CommandStart())
-async def start_command(message: Message, user_repository: SqlAlchemyUserRepository) -> None:
+async def start_command(message: Message, user_repository: UserRepository) -> None:
     telegram_user = message.from_user
     if telegram_user is None:
         await message.answer("I couldn't identify your Telegram user. Please try again.")
