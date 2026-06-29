@@ -127,6 +127,9 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         self._timeout_ms = timeout_ms
         self._retries = retries
 
+    async def close(self) -> None:
+        await self._browser_pool.close()
+
     async def _check_stock(self, request: MarketplaceCheckRequest) -> MarketplaceCheckResult:
         snapshot = await self.check_product(request.product_url, [request.pincode])
         return MarketplaceCheckResult(
