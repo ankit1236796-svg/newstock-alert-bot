@@ -57,9 +57,10 @@ def format_tracked_products(tracked_products: list[TrackedProduct]) -> str:
             "\n".join(
                 [
                     f"{index}. <b>{escape(product.product_name)}</b>",
-                    f"URL: {escape(product.product_url)}",
+                    f"Marketplace: {escape(product.marketplace.value.title())}",
                     f"Status: {display_stock_status(product)}",
                     f"PIN Codes: {escape(pincodes)}",
+                    f"URL: {escape(product.product_url)}",
                 ]
             )
         )

@@ -122,6 +122,10 @@ class SqlAlchemyProductRepository:
         await self._session.refresh(model)
         return self._to_entity(model)
 
+    async def delete(self, product_id: int) -> None:
+        await self._session.execute(delete(ProductModel).where(ProductModel.id == product_id))
+        await self._session.commit()
+
     @staticmethod
     def _to_entity(model: ProductModel) -> Product:
         return Product(

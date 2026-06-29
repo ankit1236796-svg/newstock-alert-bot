@@ -39,6 +39,7 @@ async def help_command(message: Message) -> None:
         "/help - Show this help message\n"
         "/add - Add a product to track\n"
         "/list - Show your tracked products\n"
+        "/remove - Remove a tracked product\n"
         "/ping - Check whether the bot is responsive"
     )
 
