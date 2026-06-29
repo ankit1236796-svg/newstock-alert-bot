@@ -1,0 +1,34 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: newstock-alert-bot:latest
+    container_name: newstock-alert-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env}
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////app/data/newstock_alert_bot.sqlite3}
+      STOCK_CHECK_INTERVAL_SECONDS: ${STOCK_CHECK_INTERVAL_SECONDS:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PLAYWRIGHT_TIMEOUT: ${PLAYWRIGHT_TIMEOUT:-30}
+      MAX_CONCURRENT_CHECKS: ${MAX_CONCURRENT_CHECKS:-2}
+    volumes:
+      - bot-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  bot-data:
