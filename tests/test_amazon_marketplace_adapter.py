@@ -130,7 +130,7 @@ def test_wait_for_product_content_reloads_and_retries_when_container_is_missing(
 
             async def wait_for_selector(self, selector: str, **kwargs: object) -> None:
                 assert "#centerCol" in selector
-                assert kwargs == {"state": "attached", "timeout": 1_000}
+                assert kwargs == {"state": "visible", "timeout": 1_000}
                 self.waits += 1
                 if self.waits == 1:
                     from playwright.async_api import TimeoutError as PlaywrightTimeoutError

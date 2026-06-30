@@ -193,8 +193,17 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         context: BrowserContext | None = None
         started = perf_counter()
         try:
-            context = await browser.new_context(locale="en-IN", user_agent=self._user_agent)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                locale="en-IN",
+                timezone_id="Asia/Kolkata",
+                extra_http_headers={"Accept-Language": "en-IN,en;q=0.9,hi;q=0.8"},
+            )
             page = await context.new_page()
+            await page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
             page.set_default_timeout(self._timeout_ms)
             page.set_default_navigation_timeout(self._timeout_ms)
             logger.info(
@@ -307,7 +316,7 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         last_error: PlaywrightTimeoutError | None = None
         for attempt in range(1, 3):
             try:
-                await page.wait_for_selector(selector, state="attached", timeout=timeout)
+                await page.wait_for_selector(selector, state="visible", timeout=timeout)
                 logger.info("amazon_product_content_ready", extra={"attempt": attempt})
                 await self._settle_lazy_product_content(page)
                 return
