@@ -33,6 +33,7 @@ def test_extracts_asin_from_supported_product_urls(url: str, expected: str | Non
     [
         ("Deal Price: ₹1,234.56", 123456),
         ("INR 99", 9900),
+        ("Rs. 2,499", 249900),
         ("No price", None),
     ],
 )
@@ -44,8 +45,11 @@ def test_parses_indian_price_to_paise(text: str, expected: int | None) -> None:
     ("text", "expected"),
     [
         ("In stock. Add to Cart", StockStatus.IN_STOCK),
-        ("Temporarily out of stock", StockStatus.OUT_OF_STOCK),
+        ("Temporarily out of stock", StockStatus.TEMPORARILY_UNAVAILABLE),
+        ("Temporarily unavailable", StockStatus.TEMPORARILY_UNAVAILABLE),
         ("Currently unavailable", StockStatus.CURRENTLY_UNAVAILABLE),
+        ("Currently unavailable. Add to Cart", StockStatus.CURRENTLY_UNAVAILABLE),
+        ("Only 2 left in stock - order soon.", StockStatus.IN_STOCK),
         ("Something unexpected", StockStatus.UNKNOWN),
     ],
 )

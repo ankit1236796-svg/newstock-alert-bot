@@ -25,7 +25,7 @@ _AMAZON_HOST_RE: Final[re.Pattern[str]] = re.compile(r"amazon\.in|amzn\.in", re.
 _ASIN_RE: Final[re.Pattern[str]] = re.compile(
     r"/(?:dp|gp/product|product)/([A-Z0-9]{10})(?:[/?]|$)", re.I
 )
-_PRICE_RE: Final[re.Pattern[str]] = re.compile(r"(?:₹|INR)\s*([0-9,]+(?:\.\d{1,2})?)")
+_PRICE_RE: Final[re.Pattern[str]] = re.compile(r"(?:₹|INR|Rs\.?)\s*([0-9,]+(?:\.\d{1,2})?)", re.I)
 _DEFAULT_USER_AGENT: Final[str] = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -202,7 +202,7 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             )
             await self._human_delay()
             await page.goto(product_url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            await self._safe_load_state(page, "networkidle")
+            await self._wait_for_product_content(page)
             snapshot = await self._extract_snapshot(page, product_url, pincodes)
             logger.info(
                 "amazon_check_succeeded",
@@ -238,18 +238,10 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
                 "#buybox-tabular .tabular-buybox-text",
             ],
         )
-        price_text = await self._first_text(
-            page,
-            [
-                ".a-price .a-offscreen",
-                "#corePriceDisplay_desktop_feature_div .a-offscreen",
-                "#priceblock_ourprice",
-                "#priceblock_dealprice",
-                "#apex_desktop .a-offscreen",
-            ],
-        )
+        price_text = await self._current_price_text(page)
         price_paise = self._parse_price(price_text or text)
-        status = self._stock_status(text)
+        availability_text = await self._availability_text(page)
+        status = self._stock_status(availability_text or text)
         product_id = self._product_id(product_url) or await self._first_attribute(
             page, ["input#ASIN", "input[name='ASIN']"], "value"
         )
@@ -304,6 +296,19 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
     async def _human_delay(self) -> None:
         await asyncio.sleep(random.uniform(self._min_delay_ms, self._max_delay_ms) / 1000)
 
+    async def _wait_for_product_content(self, page: Page) -> None:
+        try:
+            await page.wait_for_load_state("load", timeout=min(self._timeout_ms, 7_500))
+        except PlaywrightTimeoutError:
+            logger.info("amazon_load_state_timeout", extra={"state": "load"})
+        try:
+            await page.locator(
+                "#productTitle, #availability, #availability_feature_div, "
+                "#buybox, #corePriceDisplay_desktop_feature_div, #ppd"
+            ).first.wait_for(state="attached", timeout=min(self._timeout_ms, 7_500))
+        except PlaywrightTimeoutError:
+            logger.info("amazon_product_content_timeout")
+
     async def _safe_load_state(
         self, page: Page, state: Literal["domcontentloaded", "load", "networkidle"]
     ) -> None:
@@ -329,6 +334,74 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
                         return " ".join(text.split())
             except PlaywrightError:
                 continue
+        return None
+
+    async def _availability_text(self, page: Page) -> str | None:
+        selectors = [
+            "#availability",
+            "#availability_feature_div",
+            "#outOfStock",
+            "#desktop_qualifiedBuyBox",
+            "#buybox",
+            "#buybox_feature_div",
+            "#addToCart",
+            "#addToCart_feature_div",
+            "span.a-button:has(input[name='submit.add-to-cart'])",
+            "span.a-button:has(input[name='submit.buy-now'])",
+            "#exports_desktop_qualifiedBuybox_tlc_feature_div",
+        ]
+        parts: list[str] = []
+        for selector in selectors:
+            text = await self._first_text(page, [selector])
+            if text:
+                parts.append(text)
+        disabled = await self._disabled_purchase_text(page)
+        if disabled:
+            parts.append(disabled)
+        return " ".join(dict.fromkeys(parts)) or None
+
+    async def _disabled_purchase_text(self, page: Page) -> str | None:
+        selectors = [
+            "#add-to-cart-button",
+            "#buy-now-button",
+            "input[name='submit.add-to-cart']",
+            "input[name='submit.buy-now']",
+        ]
+        labels: list[str] = []
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).first
+                if not await locator.count():
+                    continue
+                disabled = await locator.get_attribute("disabled", timeout=2_000)
+                aria_disabled = await locator.get_attribute("aria-disabled", timeout=2_000)
+                value = await locator.get_attribute("value", timeout=2_000)
+                label = await locator.get_attribute("aria-label", timeout=2_000)
+                if value or label:
+                    labels.append(value or label or "")
+                if disabled is not None or aria_disabled == "true":
+                    labels.append("purchase button disabled")
+            except PlaywrightError:
+                continue
+        return " ".join(labels) or None
+
+    async def _current_price_text(self, page: Page) -> str | None:
+        selectors = [
+            "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
+            "#corePrice_feature_div .a-price .a-offscreen",
+            "#apex_desktop .a-price .a-offscreen",
+            "#tp_price_block_total_price_ww .a-offscreen",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice",
+            "#price_inside_buybox",
+            "#newBuyBoxPrice",
+            "#sns-base-price .a-offscreen",
+        ]
+        for selector in selectors:
+            text = await self._first_text(page, [selector])
+            price = self._parse_price(text or "")
+            if price is not None:
+                return text
         return None
 
     @staticmethod
@@ -366,12 +439,37 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
 
     @staticmethod
     def _stock_status(text: str) -> StockStatus:
-        lowered = text.lower()
-        if "currently unavailable" in lowered:
+        lowered = " ".join(text.lower().split())
+        unavailable_patterns = [
+            "currently unavailable",
+            "we don't know when or if this item will be back in stock",
+            "we do not know when or if this item will be back in stock",
+        ]
+        if any(pattern in lowered for pattern in unavailable_patterns):
             return StockStatus.CURRENTLY_UNAVAILABLE
-        if "out of stock" in lowered or "temporarily out of stock" in lowered:
+        temporarily_unavailable_patterns = [
+            "temporarily out of stock",
+            "temporarily unavailable",
+        ]
+        if any(pattern in lowered for pattern in temporarily_unavailable_patterns):
+            return StockStatus.TEMPORARILY_UNAVAILABLE
+        out_of_stock_patterns = [
+            "out of stock",
+            "sold out",
+            "unavailable from this seller",
+            "purchase button disabled",
+        ]
+        if any(pattern in lowered for pattern in out_of_stock_patterns):
             return StockStatus.OUT_OF_STOCK
-        if "in stock" in lowered or "add to cart" in lowered or "buy now" in lowered:
+        in_stock_patterns = [
+            "in stock",
+            "only ",
+            "left in stock",
+            "add to cart",
+            "buy now",
+            "available to ship",
+        ]
+        if any(pattern in lowered for pattern in in_stock_patterns):
             return StockStatus.IN_STOCK
         return StockStatus.UNKNOWN
 
