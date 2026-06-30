@@ -26,6 +26,7 @@ _ASIN_RE: Final[re.Pattern[str]] = re.compile(
     r"/(?:dp|gp/product|product)/([A-Z0-9]{10})(?:[/?]|$)", re.I
 )
 _PRICE_RE: Final[re.Pattern[str]] = re.compile(r"(?:₹|INR|Rs\.?)\s*([0-9,]+(?:\.\d{1,2})?)", re.I)
+_PRICE_WITHOUT_CURRENCY_RE: Final[re.Pattern[str]] = re.compile(r"^\s*([0-9,]+(?:\.\d{1,2})?)\s*$")
 _DEFAULT_USER_AGENT: Final[str] = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -239,9 +240,13 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             ],
         )
         price_text = await self._current_price_text(page)
-        price_paise = self._parse_price(price_text or text)
         availability_text = await self._availability_text(page)
         status = self._stock_status(availability_text or text)
+        price_paise = self._parse_price(price_text or "")
+        if price_paise is not None and status is StockStatus.UNKNOWN:
+            status = StockStatus.IN_STOCK
+        if price_paise is None and status is not StockStatus.CURRENTLY_UNAVAILABLE:
+            price_paise = self._parse_price(text)
         product_id = self._product_id(product_url) or await self._first_attribute(
             page, ["input#ASIN", "input[name='ASIN']"], "value"
         )
@@ -339,26 +344,55 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
     async def _availability_text(self, page: Page) -> str | None:
         selectors = [
             "#availability",
+            "#availabilityInsideBuyBox_feature_div",
             "#availability_feature_div",
             "#outOfStock",
             "#desktop_qualifiedBuyBox",
             "#buybox",
             "#buybox_feature_div",
+            "#desktop_buybox",
+            "#mobile_buybox",
             "#addToCart",
             "#addToCart_feature_div",
+            "#exports_desktop_qualifiedBuybox_tlc_feature_div",
+            "#merchant-info",
+            "#tabular-buybox",
+            "#buybox-tabular",
+            "#olp_feature_div",
+            "#moreBuyingChoices_feature_div",
+            "#all-offers-display",
+            "#buybox-see-all-buying-choices",
+            "#fresh-merchant-info",
+            "#almAvailability",
+            "#almBuyBox",
+            "#pantryAvailability",
+            "#snsAvailability",
+            "#deliveryBlockMessage",
+            "#mir-layout-DELIVERY_BLOCK",
             "span.a-button:has(input[name='submit.add-to-cart'])",
             "span.a-button:has(input[name='submit.buy-now'])",
-            "#exports_desktop_qualifiedBuybox_tlc_feature_div",
+            "input[name='submit.add-to-cart']",
+            "input[name='submit.buy-now']",
         ]
-        parts: list[str] = []
-        for selector in selectors:
-            text = await self._first_text(page, [selector])
-            if text:
-                parts.append(text)
+        parts = await self._texts_for_selectors(page, selectors)
         disabled = await self._disabled_purchase_text(page)
         if disabled:
             parts.append(disabled)
         return " ".join(dict.fromkeys(parts)) or None
+
+    async def _texts_for_selectors(self, page: Page, selectors: list[str]) -> list[str]:
+        parts: list[str] = []
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = min(await locator.count(), 5)
+                for index in range(count):
+                    text = (await locator.nth(index).inner_text(timeout=2_000)).strip()
+                    if text:
+                        parts.append(" ".join(text.split()))
+            except PlaywrightError:
+                continue
+        return parts
 
     async def _disabled_purchase_text(self, page: Page) -> str | None:
         selectors = [
@@ -389,19 +423,53 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         selectors = [
             "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
             "#corePrice_feature_div .a-price .a-offscreen",
+            "#corePrice_feature_div .a-price-whole",
             "#apex_desktop .a-price .a-offscreen",
+            "#apex_desktop .a-price-whole",
             "#tp_price_block_total_price_ww .a-offscreen",
             "#priceblock_ourprice",
             "#priceblock_dealprice",
+            "#priceblock_saleprice",
             "#price_inside_buybox",
             "#newBuyBoxPrice",
             "#sns-base-price .a-offscreen",
+            "#buyNewSection .a-color-price",
+            "#usedBuySection .a-color-price",
+            "#olp_feature_div .a-color-price",
+            "#moreBuyingChoices_feature_div .a-color-price",
+            "#corePriceDisplay_mobile_feature_div .a-price .a-offscreen",
+            "#corePriceDisplay_mobile_feature_div .a-price-whole",
+            ".reinventPricePriceToPayMargin .a-price .a-offscreen",
+            ".priceToPay .a-offscreen",
+            ".a-price[data-a-color='price'] .a-offscreen",
+            ".a-price .a-offscreen",
         ]
         for selector in selectors:
-            text = await self._first_text(page, [selector])
-            price = self._parse_price(text or "")
-            if price is not None:
-                return text
+            for text in await self._texts_for_selectors(page, [selector]):
+                price = self._parse_price(text) or self._parse_price_without_currency(text)
+                if price is not None:
+                    has_currency = "₹" in text or "inr" in text.lower() or "rs" in text.lower()
+                    return text if has_currency else f"₹{text}"
+        composed = await self._composed_price_text(page)
+        if composed:
+            return composed
+        return None
+
+    async def _composed_price_text(self, page: Page) -> str | None:
+        containers = [
+            "#corePriceDisplay_desktop_feature_div",
+            "#corePrice_feature_div",
+            "#apex_desktop",
+            "#corePriceDisplay_mobile_feature_div",
+            ".priceToPay",
+        ]
+        for container in containers:
+            whole = await self._first_text(page, [f"{container} .a-price-whole"])
+            if not whole:
+                continue
+            fraction = await self._first_text(page, [f"{container} .a-price-fraction"]) or "00"
+            whole = whole.replace(".", "").strip()
+            return f"₹{whole}.{fraction}"
         return None
 
     @staticmethod
@@ -424,7 +492,14 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
 
     @staticmethod
     def _parse_price(text: str) -> int | None:
-        match = _PRICE_RE.search(text)
+        matches = list(_PRICE_RE.finditer(text))
+        if not matches:
+            return None
+        return int(round(float(matches[0].group(1).replace(",", "")) * 100))
+
+    @staticmethod
+    def _parse_price_without_currency(text: str) -> int | None:
+        match = _PRICE_WITHOUT_CURRENCY_RE.search(text.replace("₹", ""))
         if not match:
             return None
         return int(round(float(match.group(1).replace(",", "")) * 100))
@@ -457,6 +532,8 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             "out of stock",
             "sold out",
             "unavailable from this seller",
+            "no sellers are currently delivering",
+            "no featured offers available",
             "purchase button disabled",
         ]
         if any(pattern in lowered for pattern in out_of_stock_patterns):
@@ -468,6 +545,12 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
             "add to cart",
             "buy now",
             "available to ship",
+            "fulfilled by amazon",
+            "free delivery",
+            "fastest delivery",
+            "get it by",
+            "get it tomorrow",
+            "see all buying options",
         ]
         if any(pattern in lowered for pattern in in_stock_patterns):
             return StockStatus.IN_STOCK
