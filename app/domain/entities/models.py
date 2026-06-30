@@ -19,6 +19,7 @@ class StockStatus(StrEnum):
     IN_STOCK = "in_stock"
     OUT_OF_STOCK = "out_of_stock"
     CURRENTLY_UNAVAILABLE = "currently_unavailable"
+    TEMPORARILY_UNAVAILABLE = "temporarily_unavailable"
     DELIVERY_NOT_AVAILABLE = "delivery_not_available"
     UNKNOWN = "unknown"
 

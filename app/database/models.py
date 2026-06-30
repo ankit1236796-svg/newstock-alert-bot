@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-_STATUS_LEN: Final = 20
+_STATUS_LEN: Final = 40
 _MARKETPLACE_LEN: Final = 40
 
 
