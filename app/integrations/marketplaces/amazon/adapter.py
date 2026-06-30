@@ -302,17 +302,65 @@ class AmazonMarketplaceAdapter(BaseMarketplace):
         await asyncio.sleep(random.uniform(self._min_delay_ms, self._max_delay_ms) / 1000)
 
     async def _wait_for_product_content(self, page: Page) -> None:
+        selector = self._product_content_selector()
+        timeout = min(self._timeout_ms, 8_000)
+        last_error: PlaywrightTimeoutError | None = None
+        for attempt in range(1, 3):
+            try:
+                await page.wait_for_selector(selector, state="attached", timeout=timeout)
+                logger.info("amazon_product_content_ready", extra={"attempt": attempt})
+                await self._settle_lazy_product_content(page)
+                return
+            except PlaywrightTimeoutError as exc:
+                last_error = exc
+                logger.info(
+                    "amazon_product_content_timeout",
+                    extra={"attempt": attempt, "selector": selector},
+                )
+                await self._nudge_lazy_product_page(page)
+                if attempt == 1:
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=self._timeout_ms)
+                    except PlaywrightTimeoutError:
+                        logger.info("amazon_load_state_timeout", extra={"state": "reload"})
+        if last_error is not None:
+            raise last_error
+
+    @staticmethod
+    def _product_content_selector() -> str:
+        return ", ".join(
+            [
+                "#dp",
+                "#centerCol",
+                "#title",
+                "#productTitle",
+                "#titleSection h1",
+                "#ppd",
+                "#availability",
+                "#availability_feature_div",
+                "#buybox",
+                "#buybox_feature_div",
+                "#desktop_buybox",
+                "#corePriceDisplay_desktop_feature_div",
+                "#corePrice_feature_div",
+                "#apex_desktop",
+            ]
+        )
+
+    async def _settle_lazy_product_content(self, page: Page) -> None:
+        await self._nudge_lazy_product_page(page)
         try:
-            await page.wait_for_load_state("load", timeout=min(self._timeout_ms, 7_500))
-        except PlaywrightTimeoutError:
-            logger.info("amazon_load_state_timeout", extra={"state": "load"})
+            await page.wait_for_timeout(500)
+        except PlaywrightError:
+            return
+
+    async def _nudge_lazy_product_page(self, page: Page) -> None:
         try:
-            await page.locator(
-                "#productTitle, #availability, #availability_feature_div, "
-                "#buybox, #corePriceDisplay_desktop_feature_div, #ppd"
-            ).first.wait_for(state="attached", timeout=min(self._timeout_ms, 7_500))
-        except PlaywrightTimeoutError:
-            logger.info("amazon_product_content_timeout")
+            await page.evaluate("window.scrollTo(0, Math.min(document.body.scrollHeight, 900))")
+            await page.wait_for_timeout(250)
+            await page.evaluate("window.scrollTo(0, 0)")
+        except PlaywrightError:
+            return
 
     async def _safe_load_state(
         self, page: Page, state: Literal["domcontentloaded", "load", "networkidle"]

@@ -110,3 +110,49 @@ def test_amazon_adapter_normalizes_retry_and_delay_configuration() -> None:
     assert adapter._retries == 0
     assert adapter._min_delay_ms == 500
     assert adapter._max_delay_ms == 500
+
+
+def test_product_content_selector_targets_real_product_containers() -> None:
+    selector = AmazonMarketplaceAdapter._product_content_selector()
+
+    for required in ("#dp", "#centerCol", "#title", "#productTitle", "#ppd"):
+        assert required in selector
+
+
+def test_wait_for_product_content_reloads_and_retries_when_container_is_missing() -> None:
+    async def run_check() -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits = 0
+                self.reloads = 0
+                self.evaluations: list[str] = []
+                self.timeouts: list[int] = []
+
+            async def wait_for_selector(self, selector: str, **kwargs: object) -> None:
+                assert "#centerCol" in selector
+                assert kwargs == {"state": "attached", "timeout": 1_000}
+                self.waits += 1
+                if self.waits == 1:
+                    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+                    raise PlaywrightTimeoutError("missing product container")
+
+            async def reload(self, *, wait_until: str, timeout: int) -> None:  # noqa: ASYNC109
+                assert wait_until == "domcontentloaded"
+                assert timeout == 1_000
+                self.reloads += 1
+
+            async def evaluate(self, script: str) -> None:
+                self.evaluations.append(script)
+
+            async def wait_for_timeout(self, timeout: int) -> None:  # noqa: ASYNC109
+                self.timeouts.append(timeout)
+
+        page = FakePage()
+        await AmazonMarketplaceAdapter(timeout_ms=1_000)._wait_for_product_content(page)  # type: ignore[arg-type]
+
+        assert page.waits == 2
+        assert page.reloads == 1
+        assert page.evaluations
+
+    asyncio.run(run_check())
